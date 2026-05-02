@@ -32,7 +32,7 @@ FROM node:20-alpine
 WORKDIR /app
 
 # install ssh-keygen
-RUN apk add --no-cache openssh-keygen
+RUN apk add --no-cache --update openssh-keygen
 
 # Only copy compiled JS code, package metadata, and production dependencies from builder
 COPY --from=builder /app/dist ./dist

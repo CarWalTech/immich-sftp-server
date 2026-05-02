@@ -4,29 +4,35 @@ import tmp from 'tmp';
 
 
 // JSON-basiertes VirtualFileSystem-Backend
-export class JsonFileSystem implements VirtualFileSystem {
+export class JsonFileSystem implements VirtualFileSystem
+{
 
   jsonPath: string;
   entries: any[];
 
-  constructor(jsonPath: string) {
+  constructor(jsonPath: string)
+  {
     this.jsonPath = jsonPath;
     this.entries = this._load();
   }
 
-  _load() {
+  _load()
+  {
     const raw = fs.readFileSync(this.jsonPath, 'utf8');
     return JSON.parse(raw).entries || [];
   }
 
-  _save() {
+  _save()
+  {
     fs.writeFileSync(this.jsonPath, JSON.stringify({ entries: this.entries }, null, 2));
   }
 
-  async listFiles(currentDir: string) {
+  async listFiles(currentDir: string)
+  {
     const entriesMap = new Map();
 
-    for (const entry of this.entries) {
+    for (const entry of this.entries)
+    {
       const parts = entry.name.split('/');
       const dir = parts.slice(0, -1).join('/') || '/';
       const name = parts[parts.length - 1];
@@ -44,7 +50,8 @@ export class JsonFileSystem implements VirtualFileSystem {
     return [...entriesMap.values()];
   }
 
-  async readFile(filename: string) {
+  async readFile(filename: string)
+  {
     const file = this.entries.find(f => f.type === 'file' && f.name === filename);
     if (!file) throw new Error('File not found');
 
@@ -54,10 +61,12 @@ export class JsonFileSystem implements VirtualFileSystem {
     return tmpFile;
   }
 
-  async writeFile(filename: string, tmpFile: tmp.FileResult) {
+  async writeFile(filename: string, tmpFile: tmp.FileResult)
+  {
     let file = this.entries.find(f => f.type === 'file' && f.name === filename);
 
-    if (!file) {
+    if (!file)
+    {
       file = {
         name: filename,
         type: 'file',
@@ -73,10 +82,11 @@ export class JsonFileSystem implements VirtualFileSystem {
     this._save();
 
     // Clean up the temporary file
-    tmpFile.removeCallback(); 
+    tmpFile.removeCallback();
   }
 
-  async stat(filename: string) {
+  async stat(filename: string)
+  {
     const entry = this.entries.find(e => e.name === filename);
     if (!entry) return null;
 
@@ -87,7 +97,8 @@ export class JsonFileSystem implements VirtualFileSystem {
     };
   }
 
-  async setAttributes(filename: string, mtime: number) {
+  async setAttributes(filename: string, mtime: number)
+  {
     const file = this.entries.find(f => f.name === filename);
     if (!file) throw new Error('File not found');
 
@@ -96,19 +107,24 @@ export class JsonFileSystem implements VirtualFileSystem {
     this._save();
   }
 
-  async rename(oldName: string, newName: string) {
+  async rename(oldName: string, newName: string)
+  {
     const entry = this.entries.find(e => e.name === oldName);
     if (!entry) throw new Error('Not found');
     if (this.entries.find(e => e.name === newName)) throw new Error('Target exists');
 
-    if (entry.type === 'dir') {
-      for (const e of this.entries) {
-        if (e.name === oldName || e.name.startsWith(oldName + '/')) {
+    if (entry.type === 'dir')
+    {
+      for (const e of this.entries)
+      {
+        if (e.name === oldName || e.name.startsWith(oldName + '/'))
+        {
           e.name = e.name.replace(oldName, newName);
           e.modified = new Date().toISOString();
         }
       }
-    } else {
+    } else
+    {
       entry.name = newName;
       entry.modified = new Date().toISOString();
     }
@@ -116,12 +132,14 @@ export class JsonFileSystem implements VirtualFileSystem {
     this._save();
   }
 
-  async remove(path: string) {
+  async remove(path: string)
+  {
     const index = this.entries.findIndex(e => e.name === path);
     if (index === -1) throw new Error('Not found');
     const entry = this.entries[index];
 
-    if (entry.type === 'dir') {
+    if (entry.type === 'dir')
+    {
       const hasChildren = this.entries.some(e => e.name.startsWith(path + '/'));
       if (hasChildren) throw new Error('Directory not empty');
     }
@@ -130,7 +148,8 @@ export class JsonFileSystem implements VirtualFileSystem {
     this._save();
   }
 
-  async mkdir(path: string) {
+  async mkdir(path: string)
+  {
     const exists = this.entries.some(e => e.name === path);
     if (exists) throw new Error('Directory already exists');
 
@@ -143,11 +162,13 @@ export class JsonFileSystem implements VirtualFileSystem {
     this._save();
   }
 
-  async login(username: string, password: string): Promise<void> {
+  async login(username: string, password: string): Promise<void>
+  {
     // No Authentication in the json file system
     return;
   }
-  async logout(): Promise<void> {
+  async logout(): Promise<void>
+  {
     // No Authentication in the json file system
     return;
   }

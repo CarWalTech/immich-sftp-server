@@ -1,4 +1,6 @@
-import {
+import { ImmichAPI } from '../immich-api';
+import
+{
     AlbumMetadataSharedUser,
     buildAlbumBrowserLink,
     buildAlbumMetadataDocument,
@@ -7,21 +9,24 @@ import {
     mergeNoSyncTag,
     parseAndValidateAlbumMetadataYaml,
     sameSharedUsers
-} from './album-metadata';
-import {
+} from './immich-album-metadata';
+import
+{
     ImmichAlbumBase,
     ImmichAlbumUser,
     ImmichUser,
     isCurrentUserAlbumOwner
-} from './immich-album-helpers';
+} from '../utils/immich-album-utils';
 
-export interface AlbumVirtualFileAlbum extends ImmichAlbumBase {
+export interface AlbumVirtualFileAlbum extends ImmichAlbumBase
+{
     albumUsers?: ImmichAlbumUser[];
 }
 
 type ImmichRequestMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
-interface ImmichRequestArgs {
+interface ImmichRequestArgs
+{
     method: ImmichRequestMethod;
     endpoint: string;
     data?: any;
@@ -32,8 +37,17 @@ interface ImmichRequestArgs {
 
 type ImmichRequestFn = (args: ImmichRequestArgs) => Promise<any>;
 type RefreshAlbumAssetsFn = (album: AlbumVirtualFileAlbum) => Promise<void>;
+type ImmichApplyMetadataFn = {
+    album: AlbumVirtualFileAlbum;
+    content: string;
+    currentUser: ImmichUser | null;
+    baseUrl: string;
+    immichAPI: ImmichAPI;
+    refreshAlbumAssets: RefreshAlbumAssetsFn;
+}
 
-function buildAlbumDocument(album: AlbumVirtualFileAlbum, currentUser: ImmichUser | null, baseUrl: string) {
+function buildAlbumDocument(album: AlbumVirtualFileAlbum, currentUser: ImmichUser | null, baseUrl: string)
+{
     return buildAlbumMetadataDocument({
         id: album.id,
         name: album.albumName,
@@ -46,7 +60,8 @@ function buildAlbumDocument(album: AlbumVirtualFileAlbum, currentUser: ImmichUse
     }, isCurrentUserAlbumOwner(album, currentUser), baseUrl);
 }
 
-export function buildAlbumMetadataYamlForAlbum(album: AlbumVirtualFileAlbum, currentUser: ImmichUser | null, baseUrl: string): string {
+export function buildAlbumMetadataYamlForAlbum(album: AlbumVirtualFileAlbum, currentUser: ImmichUser | null, baseUrl: string): string
+{
     return buildAlbumMetadataYaml({
         id: album.id,
         name: album.albumName,
@@ -59,40 +74,25 @@ export function buildAlbumMetadataYamlForAlbum(album: AlbumVirtualFileAlbum, cur
     }, isCurrentUserAlbumOwner(album, currentUser), baseUrl);
 }
 
-export function buildAlbumBrowserLinkForAlbum(album: AlbumVirtualFileAlbum, baseUrl: string): string {
+export function buildAlbumBrowserLinkForAlbum(album: AlbumVirtualFileAlbum, baseUrl: string): string
+{
     return buildAlbumBrowserLink(baseUrl, album.id);
 }
 
-export async function applyAlbumMetadataFileContent({
-    album,
-    content,
-    currentUser,
-    baseUrl,
-    immichRequest,
-    refreshAlbumAssets,
-}: {
-    album: AlbumVirtualFileAlbum;
-    content: string;
-    currentUser: ImmichUser | null;
-    baseUrl: string;
-    immichRequest: ImmichRequestFn;
-    refreshAlbumAssets: RefreshAlbumAssetsFn;
-}): Promise<void> {
+export async function applyAlbumMetadataFileContent({ album, content, currentUser, baseUrl, immichAPI, refreshAlbumAssets }: ImmichApplyMetadataFn): Promise<void>
+{
     const metadata = parseAndValidateAlbumMetadataYaml(content);
     const current = buildAlbumDocument(album, currentUser, baseUrl);
 
     const changedImmutableFields = getChangedImmutableAlbumMetadataFields(current, metadata);
-    if (changedImmutableFields.length > 0) {
-        throw new Error(`Blocked save: immutable album.yaml fields were modified (${changedImmutableFields.join(', ')}).`);
-    }
+    if (changedImmutableFields.length > 0) throw new Error(`Blocked save: immutable album.yaml fields were modified (${changedImmutableFields.join(', ')}).`);
 
-    if (!isCurrentUserAlbumOwner(album, currentUser)) {
-        throw new Error('Blocked save: only the album owner can edit album.yaml.');
-    }
+    if (!isCurrentUserAlbumOwner(album, currentUser)) throw new Error('Blocked save: only the album owner can edit album.yaml.');
 
     const newAlbumName = metadata.album.name.trim();
-    if (newAlbumName && newAlbumName !== album.albumName) {
-        await immichRequest({
+    if (newAlbumName && newAlbumName !== album.albumName)
+    {
+        await immichAPI.fetchImmichRequest({
             method: 'PATCH',
             endpoint: `albums/${album.id}`,
             data: JSON.stringify({ albumName: newAlbumName }),
@@ -102,8 +102,9 @@ export async function applyAlbumMetadataFileContent({
     }
 
     const newDescription = mergeNoSyncTag(metadata.album.description, metadata.settings.hidden);
-    if ((album.description ?? '') !== newDescription) {
-        await immichRequest({
+    if ((album.description ?? '') !== newDescription)
+    {
+        await immichAPI.fetchImmichRequest({
             method: 'PATCH',
             endpoint: `albums/${album.id}`,
             data: JSON.stringify({ description: newDescription }),
@@ -112,24 +113,28 @@ export async function applyAlbumMetadataFileContent({
         album.description = newDescription;
     }
 
-    if (!sameSharedUsers(current.sharing.sharedUsers, metadata.sharing.sharedUsers)) {
-        await updateAlbumSharing(immichRequest, album, metadata.sharing.sharedUsers);
+    if (!sameSharedUsers(current.sharing.sharedUsers, metadata.sharing.sharedUsers))
+    {
+        await updateAlbumSharing(immichAPI.fetchImmichRequest, album, metadata.sharing.sharedUsers);
     }
 
     await refreshAlbumAssets(album);
 }
 
-async function updateAlbumSharing(immichRequest: ImmichRequestFn, album: AlbumVirtualFileAlbum, sharedUsers: AlbumMetadataSharedUser[]): Promise<void> {
+async function updateAlbumSharing(immichRequest: ImmichRequestFn, album: AlbumVirtualFileAlbum, sharedUsers: AlbumMetadataSharedUser[]): Promise<void>
+{
     const existingUsers = album.albumUsers ?? [];
     const byUserId = new Map(existingUsers.map(user => [user.userId, user]));
     const byUsername = new Map(existingUsers.map(user => [user.username.toLowerCase(), user]));
 
     const updatedSharedUsers: Array<{ userId: string; role: string }> = [];
-    for (const sharedUser of sharedUsers) {
+    for (const sharedUser of sharedUsers)
+    {
         const normalizedName = sharedUser.username.trim().toLowerCase();
         const existing = (sharedUser.userId && byUserId.get(sharedUser.userId)) || byUsername.get(normalizedName);
 
-        if (!existing) {
+        if (!existing)
+        {
             throw new Error(`Blocked save: shared user '${sharedUser.username}' is not currently shared on this album. Add new users in the Immich UI before editing their role here.`);
         }
 
@@ -146,7 +151,8 @@ async function updateAlbumSharing(immichRequest: ImmichRequestFn, album: AlbumVi
         logAction: 'Update album sharing',
     });
 
-    album.albumUsers = updatedSharedUsers.map(user => {
+    album.albumUsers = updatedSharedUsers.map(user =>
+    {
         const existing = byUserId.get(user.userId);
         return {
             userId: user.userId,

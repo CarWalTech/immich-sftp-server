@@ -5,15 +5,14 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "ts-node",
             "type": "node",
             "request": "launch",
-            "name": "Launch Compiled Program",
-            "skipFiles": [
-                "<node_internals>/**"
-            ],
-            "program": "${workspaceFolder}/dist/sftp-server.js",
-            "preLaunchTask": "tsc: build - tsconfig.json",
-            "envFile": "${workspaceFolder}/.env"
+            "runtimeExecutable": "ts-node",
+            "cwd": "${workspaceRoot}",
+            "args": "${workspaceFolder}/src/server.ts",
+            "envFile": "${workspaceFolder}/.env",
+            "internalConsoleOptions": "openOnSessionStart"
         }
     ]
 }

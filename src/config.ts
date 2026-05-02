@@ -10,118 +10,150 @@ export type UserScopedSettings = {
   enableTagsFolderDefault: boolean;
   enablePeopleFolderDefault: boolean;
 };
+export type UserDisplaySettings = {
+  tagsEnabled: boolean;
+  peopleEnabled: boolean;
+}
 
-function requireEnv(name: string): string {
+function requireEnv(name: string): string
+{
   const val = process.env[name];
-  if (!val) {
+  if (!val)
+  {
     throw new Error(`Missing required environment variable: ${name}`);
   }
   return val;
 }
 
-function getEnvOrDefault(name: string, defaultValue: string): string {
+function getEnvOrDefault(name: string, defaultValue: string): string
+{
   const val = process.env[name];
-  if (!val) {
+  if (!val)
+  {
     return defaultValue;
   }
   return val;
 }
 
-function getOptionalEnv(name: string): string | undefined {
+function getOptionalEnv(name: string): string | undefined
+{
   const val = process.env[name];
-  if (!val) {
+  if (!val)
+  {
     return undefined;
   }
   const normalized = val.trim();
   return normalized === '' ? undefined : normalized;
 }
 
-function getEnvBoolean(name: string, defaultValue: boolean): boolean {
+function getEnvBoolean(name: string, defaultValue: boolean): boolean
+{
   const val = process.env[name];
-  if (!val) {
+  if (!val)
+  {
     return defaultValue;
   }
 
   const normalized = val.trim().toLowerCase();
-  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+  if (['1', 'true', 'yes', 'on'].includes(normalized))
+  {
     return true;
   }
-  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+  if (['0', 'false', 'no', 'off'].includes(normalized))
+  {
     return false;
   }
 
   throw new Error(`Invalid boolean environment variable ${name}: ${val}`);
 }
 
-function getEnvNumber(name: string, defaultValue: number): number {
+function getEnvNumber(name: string, defaultValue: number): number
+{
   const val = process.env[name];
-  if (!val) {
+  if (!val)
+  {
     return defaultValue;
   }
 
   const parsed = Number(val);
-  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) {
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535)
+  {
     throw new Error(`Invalid numeric environment variable ${name}: ${val}. Expected an integer in range 1-65535.`);
   }
   return parsed;
 }
 
-function getOptionalEnvNumber(name: string): number | undefined {
+function getOptionalEnvNumber(name: string): number | undefined
+{
   const val = process.env[name];
-  if (!val) {
+  if (!val)
+  {
     return undefined;
   }
 
   const parsed = Number(val);
-  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) {
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535)
+  {
     throw new Error(`Invalid numeric environment variable ${name}: ${val}. Expected an integer in range 1-65535.`);
   }
   return parsed;
 }
 
-function getOptionalNestedString(source: Record<string, unknown>, path: string[]): string | undefined {
+function getOptionalNestedString(source: Record<string, unknown>, path: string[]): string | undefined
+{
   let current: unknown = source;
-  for (const part of path) {
-    if (typeof current !== 'object' || current === null || Array.isArray(current) || !(part in current)) {
+  for (const part of path)
+  {
+    if (typeof current !== 'object' || current === null || Array.isArray(current) || !(part in current))
+    {
       return undefined;
     }
     current = (current as Record<string, unknown>)[part];
   }
 
-  if (typeof current !== 'string') {
+  if (typeof current !== 'string')
+  {
     return undefined;
   }
   const normalized = current.trim();
   return normalized === '' ? undefined : normalized;
 }
 
-function getOptionalNestedBoolean(source: Record<string, unknown>, path: string[]): boolean | undefined {
+function getOptionalNestedBoolean(source: Record<string, unknown>, path: string[]): boolean | undefined
+{
   let current: unknown = source;
-  for (const part of path) {
-    if (typeof current !== 'object' || current === null || Array.isArray(current) || !(part in current)) {
+  for (const part of path)
+  {
+    if (typeof current !== 'object' || current === null || Array.isArray(current) || !(part in current))
+    {
       return undefined;
     }
     current = (current as Record<string, unknown>)[part];
   }
 
-  if (typeof current === 'boolean') {
+  if (typeof current === 'boolean')
+  {
     return current;
   }
-  if (typeof current !== 'string') {
+  if (typeof current !== 'string')
+  {
     return undefined;
   }
 
   const normalized = current.trim().toLowerCase();
-  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+  if (['1', 'true', 'yes', 'on'].includes(normalized))
+  {
     return true;
   }
-  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+  if (['0', 'false', 'no', 'off'].includes(normalized))
+  {
     return false;
   }
   return undefined;
 }
 
-function buildPerUserSettingsFilePath(settingsFilePath: string, userId: string): string {
+function buildPerUserSettingsFilePath(settingsFilePath: string, userId: string): string
+{
   const parsed = path.parse(settingsFilePath);
   const fileName = `${parsed.name}.${userId}${parsed.ext}`;
   return parsed.dir ? path.join(parsed.dir, fileName) : fileName;
@@ -129,41 +161,50 @@ function buildPerUserSettingsFilePath(settingsFilePath: string, userId: string):
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function resolveSettingsFilePath(userId?: string): string | undefined {
+function resolveSettingsFilePath(userId?: string): string | undefined
+{
   const settingsFilePath = getEnvOrDefault('SETTINGS_FILE', './immich-network-storage.yaml');
   const candidates: string[] = [];
   const normalizedUserId = userId?.trim();
-  if (normalizedUserId && UUID_PATTERN.test(normalizedUserId)) {
-    if (settingsFilePath.includes('{userId}')) {
+  if (normalizedUserId && UUID_PATTERN.test(normalizedUserId))
+  {
+    if (settingsFilePath.includes('{userId}'))
+    {
       candidates.push(settingsFilePath.replace(/\{userId\}/g, normalizedUserId));
     }
     candidates.push(buildPerUserSettingsFilePath(settingsFilePath, normalizedUserId));
   }
   candidates.push(settingsFilePath);
 
-  for (const candidatePath of new Set(candidates)) {
-    if (fs.existsSync(candidatePath)) {
+  for (const candidatePath of new Set(candidates))
+  {
+    if (fs.existsSync(candidatePath))
+    {
       return candidatePath;
     }
   }
   return undefined;
 }
 
-function loadYamlSettingsFile(userId?: string): Record<string, unknown> {
+function loadYamlSettingsFile(userId?: string): Record<string, unknown>
+{
   const settingsFilePath = resolveSettingsFilePath(userId);
-  if (!settingsFilePath) {
+  if (!settingsFilePath)
+  {
     return {};
   }
 
   const content = fs.readFileSync(settingsFilePath, 'utf8');
   const parsed = YAML.parse(content);
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+  {
     throw new Error(`Invalid settings file '${settingsFilePath}': expected a YAML object.`);
   }
   return parsed as Record<string, unknown>;
 }
 
-function readYamlSettingOverrides(userId?: string): Partial<UserScopedSettings> {
+function readYamlSettingOverrides(userId?: string): Partial<UserScopedSettings>
+{
   const yamlSettings = loadYamlSettingsFile(userId);
   return {
     assetFileNamePattern: parseAssetFileNamePattern(
@@ -179,7 +220,8 @@ function readYamlSettingOverrides(userId?: string): Partial<UserScopedSettings> 
   };
 }
 
-export function loadSettingsForUser(userId?: string): UserScopedSettings {
+export function loadSettingsForUser(userId?: string): UserScopedSettings
+{
   const yamlOverrides = readYamlSettingOverrides(userId);
   return {
     assetFileNamePattern: yamlOverrides.assetFileNamePattern ?? config.assetFileNamePattern,
@@ -189,8 +231,10 @@ export function loadSettingsForUser(userId?: string): UserScopedSettings {
   };
 }
 
-function parseAssetFileNamePattern(value: string | undefined, source: string): AssetFileNamePattern | undefined {
-  if (!value) {
+function parseAssetFileNamePattern(value: string | undefined, source: string): AssetFileNamePattern | undefined
+{
+  if (!value)
+  {
     return undefined;
   }
 
@@ -207,14 +251,17 @@ function parseAssetFileNamePattern(value: string | undefined, source: string): A
     dateuuid: 'dateUuid',
   };
   const parsed = byValue[normalized];
-  if (!parsed) {
+  if (!parsed)
+  {
     throw new Error(`Invalid asset file name pattern from ${source}: ${value}. Allowed: original, assetUuid, shortUuid, date, dateUuid.`);
   }
   return parsed;
 }
 
-function parseAssetDownloadSource(value: string | undefined, source: string): AssetDownloadSource | undefined {
-  if (!value) {
+function parseAssetDownloadSource(value: string | undefined, source: string): AssetDownloadSource | undefined
+{
+  if (!value)
+  {
     return undefined;
   }
 
@@ -225,21 +272,25 @@ function parseAssetDownloadSource(value: string | undefined, source: string): As
     thumbnail: 'preview',
   };
   const parsed = byValue[normalized];
-  if (!parsed) {
+  if (!parsed)
+  {
     throw new Error(`Invalid asset download source from ${source}: ${value}. Allowed: original, preview.`);
   }
   return parsed;
 }
 
-export const config = (() => {
+export const config = (() =>
+{
   const ftpPassivePortMin = getOptionalEnvNumber('FTP_PASSIVE_PORT_MIN');
   const ftpPassivePortMax = getOptionalEnvNumber('FTP_PASSIVE_PORT_MAX');
   const yamlOverrides = readYamlSettingOverrides();
 
-  if ((ftpPassivePortMin == null) !== (ftpPassivePortMax == null)) {
+  if ((ftpPassivePortMin == null) !== (ftpPassivePortMax == null))
+  {
     throw new Error('FTP_PASSIVE_PORT_MIN and FTP_PASSIVE_PORT_MAX must both be set or both be unset.');
   }
-  if (ftpPassivePortMin != null && ftpPassivePortMax != null && ftpPassivePortMin > ftpPassivePortMax) {
+  if (ftpPassivePortMin != null && ftpPassivePortMax != null && ftpPassivePortMin > ftpPassivePortMax)
+  {
     throw new Error('FTP_PASSIVE_PORT_MIN must be less than or equal to FTP_PASSIVE_PORT_MAX.');
   }
 

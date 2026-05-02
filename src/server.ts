@@ -1,25 +1,30 @@
-import type { TransferProtocolServer } from './transfer-protocol-server';
+import type { TransferProtocolServer } from './protocols/transfer-protocol-server';
 
-async function startServers(): Promise<void> {
+async function startServers(): Promise<void>
+{
   const [{ config }, { FtpProtocolServer }, { SftpProtocolServer }, { WebdavProtocolServer }] = await Promise.all([
     import('./config'),
-    import('./ftp-server'),
-    import('./sftp-server'),
-    import('./webdav-server'),
+    import('./protocols/ftp-server'),
+    import('./protocols/sftp-server'),
+    import('./protocols/webdav-server'),
   ]);
   const servers: TransferProtocolServer[] = [];
 
-  if (config.enableSftp) {
+  if (config.enableSftp)
+  {
     servers.push(new SftpProtocolServer());
   }
-  if (config.enableFtp) {
+  if (config.enableFtp)
+  {
     servers.push(new FtpProtocolServer());
   }
-  if (config.enableWebdav) {
+  if (config.enableWebdav)
+  {
     servers.push(new WebdavProtocolServer());
   }
 
-  if (servers.length === 0) {
+  if (servers.length === 0)
+  {
     throw new Error('No transfer protocol enabled. Set ENABLE_SFTP, ENABLE_FTP and/or ENABLE_WEBDAV (accepted values: true/1/yes/on or false/0/no/off).');
   }
 
@@ -27,7 +32,8 @@ async function startServers(): Promise<void> {
   console.log(`Enabled protocols: ${servers.map((server) => server.name).join(', ')}`);
 }
 
-startServers().catch((error) => {
+startServers().catch((error) =>
+{
   console.error('Failed to initialize or start transfer servers:', error);
   process.exit(1);
 });
