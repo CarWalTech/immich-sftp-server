@@ -1,7 +1,7 @@
 import { PathUtils } from "../utils/path-utils";
-import { ImmichAlbum } from "./collections/immich-album-collection";
-import { ImmichAsset } from "./collections/immich-root-collection";
-import { ImmichTag } from "./collections/immich-tag-collection";
+
+
+import { ImmichTag, ImmichTagDirectoryInfo } from "./collections/tags/tag-folder";
 import { hasNoSyncTag } from "./metadata/immich-album-metadata";
 import { applyAlbumDetails, extractCurrentUser, ImmichAlbumApiResponse, ImmichUser, mapAlbumFromApi } from "./utils/immich-album-utils";
 import isValidFilename from 'valid-filename'; //Achtung, nicht auf v4.0.0 updaten. Ab da wird commjs projekt nicht mehr unterstützt, es geht dann nur noch als ES module.
@@ -10,15 +10,16 @@ import fs from 'fs';
 import { StringUtils } from "../utils/string-utils";
 import { ImmichCollectionUtils } from "./utils/immich-collection-utils";
 import { ImmichAssetUtils } from "./utils/immich-asset-utils";
-import axios from "axios";
+import axios, { all } from "axios";
 import { pipeline } from 'stream/promises';
 import { Readable } from "stream";
 import { config, loadSettingsForUser, UserDisplaySettings, UserScopedSettings } from "../../config";
 import FormData from 'form-data';
-import { ImmichPerson } from "./collections/immich-people-collection";
 import crypto from 'crypto';
 import { DateTime } from 'luxon';
 import { isObject } from "util";
+import { ImmichAlbumDirectoryInfo, ImmichAlbumFolder } from "./collections/albums/album-folder";
+import { ImmichAsset } from "./collections/asset-file";
 
 
 export class ImmichAPI
@@ -147,18 +148,18 @@ export class ImmichAPI
     }
 
     // Fetch Methods
-    public async fetchAlbums(): Promise<ImmichAlbum[]>
+    public async fetchAlbums(assetId?: string): Promise<ImmichAlbumDirectoryInfo[]>
     {
         const [ownAlbumsResponse, sharedAlbumsResponse] = await Promise.all([
             this.fetchImmichRequest({
                 method: 'GET',
-                endpoint: 'albums',
+                endpoint: assetId ? `albums?assetId=${assetId}` : 'albums',
                 logAction: 'All own albums',
                 skipResponseLog: true,
             }),
             this.fetchImmichRequest({
                 method: 'GET',
-                endpoint: 'albums?shared=true',
+                endpoint: assetId ? `albums?shared=true&assetId=${assetId}` : 'albums?shared=true',
                 logAction: 'All shared albums',
                 skipResponseLog: true,
             }),
@@ -180,7 +181,7 @@ export class ImmichAPI
 
         return this.filterAlbums(Array.from(combinedByAlbumId.values()));
     }
-    public async fetchAlbumsForAssetId(assetId: string): Promise<ImmichAlbum[]>
+    public async fetchAlbumsForAssetId(assetId: string): Promise<ImmichAlbumDirectoryInfo[]>
     {
         // Check in which albums the asset is used
         const response = await this.fetchImmichRequest({
@@ -212,7 +213,14 @@ export class ImmichAPI
         }
         return tags;
     }
-    public async fetchAssetsForAlbum(album: ImmichAlbum): Promise<void>
+    public async fetchAssetForUnsorted(): Promise<ImmichAsset[]>
+    {
+        const normal_items = await this.fetchAssetsByMetadata({ notInAlbum: true })
+        const archived_items = await this.fetchAssetsByMetadata({ notInAlbum: true, visibility: "archive" })
+        const all_assets: ImmichAsset[] = [...normal_items, ...archived_items]
+        return all_assets
+    }
+    public async fetchAssetsForAlbum(album: ImmichAlbumDirectoryInfo): Promise<void>
     {
         // Fetch assets
         const response = await this.fetchImmichRequest({
@@ -237,7 +245,18 @@ export class ImmichAPI
         // Convert to ImmichAsset
         album.assets = all_assets
     }
-    public async fetchAssetsByMetadata(query: { albumIds?: string[], visibility?: string, tagIds?: string[]; personIds?: string[] }): Promise<ImmichAsset[]>
+    public async fetchAssetsForTag(tag: ImmichTagDirectoryInfo): Promise<void>
+    {
+        // Fetch assets
+        const normal_items = await this.fetchAssetsByMetadata({ tagIds: [tag.id], visibility: "archive" })
+        const archived_items = await this.fetchAssetsByMetadata({ tagIds: [tag.id], visibility: "archive" })
+
+        const all_assets: ImmichAsset[] = [...normal_items, ...archived_items]
+
+        // Convert to ImmichAsset
+        tag.assets = all_assets
+    }
+    public async fetchAssetsByMetadata(query: { albumIds?: string[], visibility?: string, tagIds?: string[]; personIds?: string[], notInAlbum?: boolean }): Promise<ImmichAsset[]>
     {
         const byAssetId = new Map<string, ImmichAsset>();
         let page = 1;
@@ -347,56 +366,6 @@ export class ImmichAPI
             };
         }
     }
-    public async fetchPeople(): Promise<ImmichPerson[]>
-    {
-        const people: ImmichPerson[] = [];
-        const seenNames = new Set<string>();
-        let page = 1;
-
-        while (true)
-        {
-            const response = await this.fetchImmichRequest({
-                method: 'GET',
-                endpoint: `people?page=${page}&size=1000&withHidden=false`,
-                logAction: 'All people',
-                skipResponseLog: true,
-            });
-
-            const responsePeople = Array.isArray(response?.people) ? response.people : [];
-            for (const person of responsePeople)
-            {
-                if (!person?.id || typeof person?.id !== 'string')
-                {
-                    continue;
-                }
-                const displayName = PathUtils.normalizeFolderDisplayName(String(person.name ?? ''), 'person', person.id);
-                if (!isValidFilename(displayName))
-                {
-                    continue;
-                }
-                const lowerDisplayName = displayName.toLowerCase();
-                if (seenNames.has(lowerDisplayName))
-                {
-                    continue;
-                }
-                seenNames.add(lowerDisplayName);
-                people.push({
-                    id: person.id,
-                    name: String(person.name ?? ''),
-                    displayName,
-                    updatedAt: typeof person.updatedAt === 'string' ? person.updatedAt : undefined,
-                });
-            }
-
-            if (!response?.hasNextPage)
-            {
-                break;
-            }
-            page += 1;
-        }
-
-        return people;
-    }
 
     // Filter Methods
     private filterAlbums(response: unknown)
@@ -408,7 +377,7 @@ export class ImmichAPI
         }
 
         // Map response to ImmichAlbum objects, sanitizing album names for use as folder names
-        const albums: ImmichAlbum[] = response.map((item): ImmichAlbum =>
+        const albums: ImmichAlbumDirectoryInfo[] = response.map((item): ImmichAlbumDirectoryInfo =>
         {
             const base = mapAlbumFromApi(item as ImmichAlbumApiResponse);
             return {
@@ -493,10 +462,12 @@ export class ImmichAPI
     {
         return this.uploadQueue.find(f => f.filename === filename)
     }
-    public QUEUE_AppendFile(filename: string, tmpFile: tmp.FileResult)
+    public QUEUE_AppendFile(data: ImmichUploadQueueItem)
     {
-        this.uploadQueue.push({ filename, tmpFile });
+        console.warn(`Pushed File to UploadQueue: ${data.filename}`)
+        this.uploadQueue.push(data);
     }
+
     public QUEUE_RenameFileInFlight(oldName: string, newName: string)
     {
         const fileIndex = this.uploadQueue.findIndex(f => f.filename === oldName);
@@ -508,8 +479,9 @@ export class ImmichAPI
         tmpFile.removeCallback();
         throw new Error(`'${filename}' is read-only.`);
     }
-    public async QUEUE_UploadFile(filename: string, fileEntry: ImmichUploadQueueItem, mtime: number, params: ImmichUploadParams)
+    public async QUEUE_UploadFile(filename: string, fileEntry: ImmichUploadQueueItem, mtime: number)
     {
+        console.warn(`Uplading File from UploadQueue: ${fileEntry.filename}`)
         // Calculate SHA-1 checksum of the buffer
         const hash = crypto.createHash('sha1');
         await pipeline(fs.createReadStream(fileEntry.tmpFile.name), hash);
@@ -536,7 +508,7 @@ export class ImmichAPI
             data.append('fileCreatedAt', isoWithOffset);
             data.append('deviceAssetId', filename); // Use fileName as deviceAssetId
             data.append('deviceId', 'immich-network-storage');
-            if (params.uploadToAlbum) data.append('albumId', params.uploadToAlbum.id);
+            if (fileEntry.uploadToAlbum) data.append('albumId', fileEntry.uploadToAlbum.id);
 
             // Add stream from tmp file
             const readStream = fs.createReadStream(fileEntry.tmpFile.name);
@@ -555,7 +527,7 @@ export class ImmichAPI
         //Restore the asset if it is in the trash
         if (action == "reject" && isTrashed == true)
         {
-            if (params.removeFromOtherAlbums == true)
+            if (fileEntry.removeFromOtherAlbums == true)
             {
                 //Remove the trashed asset from other albums, in case it has some
                 const assigedAlbums = await this.fetchAlbumsForAssetId(assetId);
@@ -569,11 +541,75 @@ export class ImmichAPI
         }
 
         // Add the new asset to the album
-        if (params.uploadToAlbum) await this.SERVER_AddAssetToAlbum(params.uploadToAlbum, assetId)
+        if (fileEntry.uploadToAlbum) await this.SERVER_AddAssetToAlbum(fileEntry.uploadToAlbum, assetId)
+    }
+    public async QUEUE_UploadFile_v2(fileEntry: ImmichUploadQueueItem, mtime: number)
+    {
+        const filename = fileEntry.filename
+        console.warn(`Uplading File: ${fileEntry.filename}`)
+        // Calculate SHA-1 checksum of the buffer
+        const hash = crypto.createHash('sha1');
+        await pipeline(fs.createReadStream(fileEntry.tmpFile.name), hash);
+        const checksum = hash.digest('base64');
+
+        // Check if the asset already exists using bulk-upload-check
+        const bulkCheckResponse = await this.SERVER_PerformBulkAssetUploadCheck(checksum, filename);
+
+        // Parse response
+        const result = bulkCheckResponse.results[0];
+        const action = result.action;
+        let assetId = result.assetId;
+        const isTrashed = result.isTrashed;
+        const reason = result.reason;
+        console.log(`Bulk check result for '${filename}': action=${action}, assetId=${assetId}, isTrashed=${isTrashed}, reason=${reason}`);
+
+        // If the asset doen't exist, upload it
+        if (action == "accept")
+        {
+            // Prepare form data
+            const data = new FormData();
+            const isoWithOffset = DateTime.fromSeconds(mtime, { zone: config.TZ }).toJSDate().toISOString();
+            data.append('fileModifiedAt', isoWithOffset);
+            data.append('fileCreatedAt', isoWithOffset);
+            data.append('deviceAssetId', filename); // Use fileName as deviceAssetId
+            data.append('deviceId', 'immich-network-storage');
+
+            // Add stream from tmp file
+            const readStream = fs.createReadStream(fileEntry.tmpFile.name);
+            data.append('assetData', readStream, { filename: filename });
+
+            // Send the upload request to Immich
+            const uploadResponse = await this.SERVER_UploadAsset(data);
+
+            // Close tmp file after successful upload
+            fileEntry.tmpFile.removeCallback();
+
+            // Get the new asset id
+            assetId = uploadResponse.id;
+        }
+
+        //Restore the asset if it is in the trash
+        if (action == "reject" && isTrashed == true)
+        {
+            if (fileEntry.removeFromOtherAlbums == true)
+            {
+                //Remove the trashed asset from other albums, in case it has some
+                const assigedAlbums = await this.fetchAlbumsForAssetId(assetId);
+                if (assigedAlbums && assigedAlbums.length > 0)
+                    for (const assigedAlbum of assigedAlbums)
+                        await this.SERVER_RemoveAssetFromAlbum(assigedAlbum, assetId);
+
+                await this.SERVER_RestoreAssetFromTrash(assetId); //Restore the asset from the trash
+            }
+
+        }
+
+        // Add the new asset to the album
+        if (fileEntry.uploadToAlbum) await this.SERVER_AddAssetToAlbum(fileEntry.uploadToAlbum, assetId)
     }
 
     // Server Functions
-    async SERVER_RemoveAssetFromAlbum(album: ImmichAlbum, assetId: string): Promise<void>
+    async SERVER_RemoveAssetFromAlbum(album: ImmichAlbumDirectoryInfo, assetId: string): Promise<void>
     {
         await this.fetchImmichRequest({
             method: 'DELETE',
@@ -582,7 +618,7 @@ export class ImmichAPI
             logAction: 'Remove asset from album'
         });
     }
-    async SERVER_DeleteAssetFromAlbum(album: ImmichAlbum, asset: ImmichAsset): Promise<void>
+    async SERVER_DeleteAssetFromAlbum(album: ImmichAlbumDirectoryInfo, asset: ImmichAsset): Promise<void>
     {
         // Check in which albums the asset is used
         const albumsForAsset = await this.fetchAlbumsForAssetId(asset.id);
@@ -609,7 +645,7 @@ export class ImmichAPI
             logAction: 'Create album'
         });
     }
-    async SERVER_RenameAlbum(album: ImmichAlbum, newAlbumName: string): Promise<void>
+    async SERVER_RenameAlbum(album: ImmichAlbumDirectoryInfo, newAlbumName: string): Promise<void>
     {
         await this.fetchImmichRequest({
             method: 'PATCH',
@@ -618,7 +654,7 @@ export class ImmichAPI
             logAction: 'Rename album',
         });
     }
-    async SERVER_DeleteAlbum(album: ImmichAlbum)
+    async SERVER_DeleteAlbum(album: ImmichAlbumDirectoryInfo)
     {
         await this.fetchImmichRequest({
             method: 'DELETE',
@@ -626,7 +662,7 @@ export class ImmichAPI
             logAction: 'Delete album'
         });
     }
-    async SERVER_AddAssetToAlbum(album: ImmichAlbum, assetId: any)
+    async SERVER_AddAssetToAlbum(album: ImmichAlbumDirectoryInfo, assetId: any)
     {
         await this.fetchImmichRequest({
             method: 'PUT',
@@ -636,6 +672,14 @@ export class ImmichAPI
             }),
             logAction: 'Add asset to album'
         });
+    }
+    async SERVER_AddAssetToUnsorted(assetId: any)
+    {
+        const albums = await this.fetchAlbums(assetId)
+        for (var i = 0; i < albums.length; i++)
+        {
+            await this.SERVER_RemoveAssetFromAlbum(albums[i], assetId)
+        }
     }
     async SERVER_RestoreAssetFromTrash(assetId: any)
     {
@@ -721,26 +765,12 @@ export class ImmichAPI
             logAction: 'Rename tag',
         });
     }
-    async SERVER_RenamePerson(person: ImmichPerson, newDisplayName: string)
-    {
-        await this.fetchImmichRequest({
-            method: 'PUT',
-            endpoint: `people/${person.id}`,
-            data: JSON.stringify({ name: newDisplayName }),
-            logAction: 'Rename person',
-        });
-    }
 }
 
 export interface ImmichUploadQueueItem
 {
     filename: string;
     tmpFile: tmp.FileResult;
-    uploadToAlbum?: ImmichAlbum;
-}
-
-export interface ImmichUploadParams
-{
-    uploadToAlbum?: ImmichAlbum;
+    uploadToAlbum?: ImmichAlbumDirectoryInfo;
     removeFromOtherAlbums?: boolean;
 }

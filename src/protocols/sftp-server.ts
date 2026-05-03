@@ -8,6 +8,7 @@ import { JsonFileSystem } from '../filesystem/json-file-system';
 import { ImmichFileSystem } from '../filesystem/immich/immich-file-system';
 import { config } from '../config';
 import { TransferProtocolServer } from './transfer-protocol-server';
+import { VirtualFSNodeListInfo } from '../filesystem/common/virtual-fs-node';
 
 // SFTP Statuscodes
 const STATUS_CODE = {
@@ -149,8 +150,6 @@ const server = new Server({
           }
         });
 
-
-
         sftpStream.on('OPENDIR', (reqid, rawPath) =>
         {
           try
@@ -180,18 +179,15 @@ const server = new Server({
           }
         });
 
-
         sftpStream.on('READDIR', (reqid, handle) =>
         {
           const key = handle.toString('hex');
           const entry = handleMap[key] as HandleEntry | undefined;
 
-          console.log(`READDIR reqid=${reqid} handle=${key}`);
-
-          if (!entry)
+          // AeroFTP sends READDIR after CLOSE → respond EOF
+          if (!entry || entry.closed)
           {
-            console.error(`READDIR on unknown handle ${key}`);
-            sftpStream.status(reqid, STATUS_CODE.FAILURE);
+            sftpStream.status(reqid, STATUS_CODE.EOF);
             return;
           }
 
@@ -201,15 +197,14 @@ const server = new Server({
             entry.dirPendingReqs = [];
           }
 
-          // Enqueue this reqid
           entry.dirPendingReqs.push(reqid);
 
-          // Kick the worker if not already running
           if (!entry.dirBusy)
           {
             processReadDirQueue(entry, key, sftpStream, fsBackend);
           }
         });
+
 
         async function processReadDirQueue(
           entry: HandleEntry,
@@ -222,58 +217,71 @@ const server = new Server({
 
           try
           {
-            // Initialize directory listing once
-            if (!entry.dirEntries)
+
+            if (!entry.files)
             {
               console.log(`READDIR init listing for handle=${handleKey} path='${entry.path}'`);
-              const files = await fsBackend.listFiles(entry.path);
-
-              entry.dirEntries = files.map(file =>
-              {
-                const perms = file.isDir ? 'drwxr-xr-x' : '-rw-r--r--';
-                const date = new Date(file.mtime * 1000);
-                const dateStr = date.toISOString().split('T')[0];
-
-                return {
-                  filename: file.name,
-                  longname: `${perms} 1 user group ${file.size} ${dateStr} ${file.name}`,
-                  attrs: {
-                    size: file.size,
-                    mtime: file.mtime,
-                    atime: file.mtime,
-                    mode: file.isDir ? 0o040755 : 0o100644,
-                    uid: 0,
-                    gid: 0
-                  }
-                };
-              });
-
+              entry.files = await fsBackend.listFiles(entry.path);
               entry.dirIndex = 0;
             }
+
 
             while (entry.dirPendingReqs && entry.dirPendingReqs.length > 0)
             {
               const reqid = entry.dirPendingReqs.shift()!;
 
-              if (!entry.dirEntries || entry.dirIndex == null)
+              if (!entry.files || entry.dirIndex == null)
               {
-                console.error(`READDIR: dirEntries/dirIndex missing for handle=${handleKey}`);
-                console.log(`READDIR RESPOND failure reqid=${reqid}`);
                 sftpStream.status(reqid, STATUS_CODE.FAILURE);
                 continue;
               }
 
-              if (entry.dirIndex >= entry.dirEntries.length)
+              // If we've exhausted the list, return EOF
+              if (entry.dirIndex >= entry.files.length)
               {
-                console.log(`READDIR RESPOND EOF reqid=${reqid} handle=${handleKey}`);
                 sftpStream.status(reqid, STATUS_CODE.EOF);
                 continue;
               }
 
-              const nextEntry = entry.dirEntries[entry.dirIndex++];
-              console.log(`READDIR RESPOND name reqid=${reqid} handle=${handleKey} filename='${nextEntry.filename}'`);
-              sftpStream.name(reqid, [nextEntry]);
+              // Batch up to N entries
+              const batch: SftpDirEntry[] = [];
+              const BATCH_SIZE = 50;
+
+              for (let i = 0; i < BATCH_SIZE && entry.dirIndex < entry.files.length; i++)
+              {
+                const file = entry.files[entry.dirIndex++];
+
+                // Lazily build SFTP entry
+                const anyFile = file as any;
+                if (!anyFile._sftpEntry)
+                {
+                  const perms = file.isDir ? 'drwxr-xr-x' : '-rw-r--r--';
+                  const d = new Date(file.mtime * 1000);
+                  const dateStr = `${d.getFullYear()}-${(d.getMonth() + 1)
+                    .toString()
+                    .padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')}`;
+
+                  anyFile._sftpEntry = {
+                    filename: file.name,
+                    longname: `${perms} 1 user group ${file.size} ${dateStr} ${file.name}`,
+                    attrs: {
+                      size: file.size,
+                      mtime: file.mtime,
+                      atime: file.mtime,
+                      mode: file.isDir ? 0o040755 : 0o100644,
+                      uid: 0,
+                      gid: 0
+                    }
+                  };
+                }
+
+                batch.push(anyFile._sftpEntry);
+              }
+
+              // Send the batch
+              sftpStream.name(reqid, batch);
             }
+
           } catch (err)
           {
             console.error(`READDIR error for handle=${handleKey}:`, err);
@@ -290,8 +298,6 @@ const server = new Server({
             entry.dirBusy = false;
           }
         }
-
-
 
         sftpStream.on('OPEN', async (reqid, filename, flags, attrs) =>
         {
@@ -332,14 +338,14 @@ const server = new Server({
             const key = handle.toString('hex');
             const entry = handleMap[key];
 
-            console.log(`READ reqid=${reqid} handle=${key} offset=${offset} length=${length}`);
-
-            if (!entry)
+            // 🚨 FIX: AeroFTP sends READ after CLOSE → treat as EOF
+            if (!entry || entry.closed)
             {
-              console.error(`READ on unknown handle ${key}`);
-              console.log(`READ RESPOND failure reqid=${reqid}`);
-              return sftpStream.status(reqid, STATUS_CODE.FAILURE);
+              console.log(`READ after CLOSE reqid=${reqid} handle=${key} → EOF`);
+              return sftpStream.status(reqid, STATUS_CODE.EOF);
             }
+
+            console.log(`READ reqid=${reqid} handle=${key} offset=${offset} length=${length}`);
 
             if (!entry.readInitPromise)
             {
@@ -421,7 +427,6 @@ const server = new Server({
           }
         });
 
-
         sftpStream.on('CLOSE', async (reqid, handle) =>
         {
           try
@@ -433,30 +438,41 @@ const server = new Server({
 
             if (!entry)
             {
-              console.error(`CLOSE on unknown handle ${key}`);
               console.log(`CLOSE RESPOND OK (already closed) reqid=${reqid}`);
               return sftpStream.status(reqid, STATUS_CODE.OK);
             }
 
+            // Mark handle as closed so READDIR can gracefully return EOF
+            entry.closed = true;
+
+            // Cleanup read temp file
             if (entry.readTmpFile != null)
             {
               console.log(`CLOSE removing read tmp file for handle=${key}`);
               entry.readTmpFile.removeCallback();
             }
 
+            // Finalize write temp file (upload)
             if (entry.writeTmpFile != null)
             {
               console.log(`CLOSE writing backend file for handle=${key} path='${entry.path}'`);
               await fsBackend.writeFile(entry.path, entry.writeTmpFile);
             }
 
-            delete handleMap[key];
-            console.log(`CLOSE RESPOND OK reqid=${reqid} handle=${key}`);
+            // Respond OK immediately
             sftpStream.status(reqid, STATUS_CODE.OK);
+            console.log(`CLOSE RESPOND OK reqid=${reqid} handle=${key}`);
+
+            // Delay deletion to allow AeroFTP's pipelined READDIR calls
+            setTimeout(() =>
+            {
+              console.log(`CLOSE cleanup handle=${key}`);
+              delete handleMap[key];
+            }, 1000);
+
           } catch (e)
           {
             console.error('CLOSE error:', e);
-            console.log(`CLOSE RESPOND failure reqid=${reqid}`);
             sftpStream.status(reqid, STATUS_CODE.FAILURE);
           }
         });
@@ -505,7 +521,6 @@ const server = new Server({
             sftpStream.status(reqid, STATUS_CODE.FAILURE);
           }
         });
-
 
         sftpStream.on('SETSTAT', async (reqid, filePath, attrs: Attributes) =>
         {
@@ -638,25 +653,22 @@ interface SftpDirEntry
 interface HandleEntry
 {
   path: string;
-
-  // Directory handling
   directoryEntryRead: boolean | null;
 
-  // New directory state
-  dirEntries?: SftpDirEntry[];
+  files?: VirtualFSNodeListInfo[];
   dirIndex?: number;
 
-  // NEW: queue + lock for READDIR
   dirPendingReqs?: number[];
   dirBusy?: boolean;
 
-  // Write files
-  writeTmpFile: tmp.FileResult | null;
+  closed?: boolean;   // ← add this
 
-  // Read files content
+  writeTmpFile: tmp.FileResult | null;
   readInitPromise: Promise<void> | null;
   readTmpFile: tmp.FileResult | null;
   readSize: number | null;
 }
+
+
 
 

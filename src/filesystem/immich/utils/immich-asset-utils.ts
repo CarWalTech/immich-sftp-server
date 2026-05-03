@@ -1,7 +1,8 @@
-import { ImmichAsset } from "../collections/immich-root-collection";
+
 import path from 'path';
 import { DateTime } from 'luxon';
 import { config, UserScopedSettings, loadSettingsForUser } from '../../../config';
+import { ImmichAsset } from '../collections/asset-file';
 
 const DEFAULT_ASSET_BASE_NAME = 'asset';
 

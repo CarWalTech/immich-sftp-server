@@ -9,4 +9,11 @@ export class FileUtils
         fs.writeFileSync(tempFile.name, content, 'utf8');
         return tempFile;
     }
+
+    public static createTmpFileFromBuffer(content: Buffer): tmp.FileResult
+    {
+        const tempFile = tmp.fileSync();
+        fs.writeFileSync(tempFile.name, content, 'utf8');
+        return tempFile;
+    }
 }

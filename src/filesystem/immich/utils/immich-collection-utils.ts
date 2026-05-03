@@ -1,4 +1,4 @@
-import { ImmichTag } from "../collections/immich-tag-collection";
+import { ImmichTag } from "../collections/tags/tag-folder";
 
 
 const DEFAULT_ASSET_BASE_NAME = 'asset';

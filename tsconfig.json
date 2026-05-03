@@ -11,6 +11,11 @@
     "noEmitOnError": false,
     "sourceMap": true //To use break points
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
 }
