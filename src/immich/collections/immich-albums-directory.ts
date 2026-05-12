@@ -14,7 +14,7 @@ export class ImmichAlbumsDirectory extends ImmichVirtualDirectory
 {
     constructor(file_system: ImmichFileSystem, root: ImmichRootDirectory)
     {
-        super(file_system, "albums", undefined, root, { refreshOnReadDir: true })
+        super(file_system, "albums", undefined, root)
     }
 
     async event_stat(): Promise<VirtualMetadata>
