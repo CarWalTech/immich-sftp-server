@@ -214,7 +214,10 @@ async function SFTP_READDIR(self: SftpConnectionInstance, reqid: number, handle:
 
   if (!entry.dirBusy)
   {
-    processReadDirQueue(entry, key, self);
+    processReadDirQueue(entry, key, self).catch(err =>
+    {
+      logger.error('SFTP', 'READDIR', `Unhandled error in processReadDirQueue for handle=${key}:`, err);
+    });
   }
 }
 async function SFTP_OPEN(self: SftpConnectionInstance, reqid: number, filename: string, flags: number, attrs: Attributes)
@@ -693,7 +696,7 @@ async function processReadDirQueue(entry: SftpHandleEntry, key: string, self: Sf
     {
       for (const reqid of entry.dirPendingReqs)
       {
-        self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
+        try { self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE); } catch { /* stream already closed */ }
       }
       entry.dirPendingReqs = [];
     }
