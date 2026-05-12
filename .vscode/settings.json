@@ -1,1 +1,26 @@
-{}
+{
+    "DockerRun.DisableDockerrc": true,
+    "DockerRun.Containers": [
+        "1b2c5cdfcfae"
+    ],
+    "remote.autoForwardPorts": true,
+    "remote.restoreForwardedPorts": true,
+    "remote.portsAttributes": {
+        "9229": {
+            "onAutoForward": "notify",
+            "label": "Application"
+        },
+        "19000": {
+            "onAutoForward": "notify",
+            "label": "WebDAV"
+        },
+        "22100": {
+            "onAutoForward": "notify",
+            "label": "FTP"
+        },
+        "22832": {
+            "onAutoForward": "notify",
+            "label": "SFTP",
+        },
+    }
+}
