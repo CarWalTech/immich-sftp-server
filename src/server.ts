@@ -1,3 +1,6 @@
+
+
+import { logger } from './logger';
 import type { TransferProtocolServer } from './protocols/transfer-protocol-server';
 
 async function startServers(): Promise<void>
@@ -29,11 +32,11 @@ async function startServers(): Promise<void>
   }
 
   await Promise.all(servers.map((server) => server.start()));
-  console.log(`Enabled protocols: ${servers.map((server) => server.name).join(', ')}`);
+  logger.info('SERVER', 'MAIN', `Enabled protocols: ${servers.map((server) => server.name).join(', ')}`)
 }
 
 startServers().catch((error) =>
 {
-  console.error('Failed to initialize or start transfer servers:', error);
+  logger.error('SERVER', 'MAIN', 'Failed to initialize or start transfer servers:', error)
   process.exit(1);
 });

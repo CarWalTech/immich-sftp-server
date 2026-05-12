@@ -21,45 +21,40 @@ RUN npm run build
 # Keep only production dependencies for runtime image
 RUN npm prune --omit=dev --loglevel=error --no-audit --no-fund
 
-
-
 ########################################
 # Final Stage: Lightweight runtime image
 ########################################
-FROM node:20-alpine
+FROM debian:stable-slim
 
 # Set working directory
 WORKDIR /app
 
-# Install ONLY the SFTP subsystem binary (no sshd)
-RUN apk add --no-cache openssh-sftp-server
+RUN apt-get update && \
+    apt-get install -y openssh-server nodejs npm && \
+    mkdir -p /var/run/sshd
 
-# install ssh-keygen
-RUN apk add --no-cache --update openssh-keygen
+# Optional: give full sudo access without password
+RUN echo "immich ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
-# install libssh-dev
-RUN apk add --no-cache --update libssh-dev
-
-RUN npm install -g ts-node
-
-# Copy package metadata first for better layer caching
-COPY package*.json ./
-
-# Install dependencies including dev dependencies for building
-RUN npm ci --loglevel=error --no-audit --no-fund
-
-# Copy source files
-COPY . .
+# Configure SSHD
+RUN mkdir -p /etc/ssh
+RUN echo "Port 22" > /etc/ssh/sshd_config && \
+    echo "Subsystem sftp /usr/lib/openssh/sftp-server -e" >> /etc/ssh/sshd_config && \
+    echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config && \
+    echo "PermitRootLogin no" >> /etc/ssh/sshd_config && \
+    echo "UsePAM no" >> /etc/ssh/sshd_config
 
 # Only copy compiled JS code, package metadata, and production dependencies from builder
-#COPY --from=builder /app/dist ./dist
-#COPY --from=builder /app/package*.json ./
-#COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/node_modules ./node_modules
 
 # Expose SFTP, FTP control, and WebDAV ports
 EXPOSE 22
 EXPOSE 21
 EXPOSE 1900
 
+RUN /usr/sbin/sshd
+
 # Default command to run transfer servers bootstrap
-CMD ["ts-node", "/app/src/server.ts"]
+CMD ["node", "dist/server.js"]

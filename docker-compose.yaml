@@ -1,0 +1,25 @@
+services:
+  immich-network-storage-api:
+    build:
+      context: /omv/apps-compose/immich-network-storage/repo
+      dockerfile: Dockerfile
+      network: host
+    container_name: immich-network-storage-api
+    user: 82:82
+    environment:
+      IMMICH_HOST: https://immich2.carjemgenerations.io
+      TZ: US/Eastern
+      ENABLE_SFTP: "true"
+      ENABLE_FTP: "false"
+      ENABLE_WEBDAV: "false"
+      SFTP_PORT: "22"
+      FTP_PORT: "21"
+      WEBDAV_PORT: "1900"
+      SETTINGS_FILE: "/config/immich-network-storage.yaml"
+    ports:
+      - "22832:22" # SFTP
+      - "22100:21" # FTP
+      - "19000:1900" # WebDAV
+    volumes:
+      - /omv/apps-compose/immich-network-storage/config:/config
+    restart: unless-stopped

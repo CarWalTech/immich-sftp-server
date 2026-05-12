@@ -1,15 +1,33 @@
+// ──────────────────────────────────────────────────────────────
+// WebDAV Protocol Server — SFTP‑Equivalent Behavior
+// ──────────────────────────────────────────────────────────────
+
 import fs from 'fs';
 import tmp from 'tmp';
 import crypto from 'crypto';
 import { Writable, Readable } from 'stream';
 import { v2 as webdav } from 'webdav-server';
 import { config } from '../config';
-import { ImmichFileSystem } from '../filesystem/immich/immich-file-system';
+import { ImmichFileSystem } from '../immich/immich-file-system';
 import { VirtualFileSystem } from '../filesystem/virtual-file-system';
 import { TransferProtocolServer } from './transfer-protocol-server';
+import { logger } from '../logger';
+import path from 'path';
 
 // ──────────────────────────────────────────────────────────────
-// Auth: custom user manager that validates against Immich
+// Shared path normalization (identical to SFTP)
+// ──────────────────────────────────────────────────────────────
+
+function normalizePath(p: string): string
+{
+  const normalized = path.posix.normalize(p);
+  if (normalized === '.' || normalized === '') return '/';
+  const abs = normalized.replace(/^\/+|\/+$/g, '');
+  return '/' + abs;
+}
+
+// ──────────────────────────────────────────────────────────────
+// Auth: identical to SFTP backend login
 // ──────────────────────────────────────────────────────────────
 
 interface ImmichWebdavUser extends webdav.IUser
@@ -20,16 +38,11 @@ interface ImmichWebdavUser extends webdav.IUser
 interface CachedUser
 {
   readonly user: ImmichWebdavUser;
-  // Stored for timing-safe comparison on subsequent requests (not used for
-  // persistent storage – the session lives only in process memory).
   readonly passwordBuf: Buffer;
   lastUsed: number;
 }
 
-const SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
-
-// Cache keyed by username.  The stored passwordBuf is compared in
-// constant-time on every cache hit to guard against session hijacking.
+const SESSION_TTL_MS = 60 * 60 * 1000;
 const userCache = new Map<string, CachedUser>();
 
 function pruneUserCache(): void
@@ -47,10 +60,6 @@ function pruneUserCache(): void
 
 setInterval(pruneUserCache, 5 * 60 * 1000).unref();
 
-/** Call a webdav-server success callback.  The library's TS types declare the
- *  first argument as `Error` (never null/undefined), but the runtime checks
- *  truthiness; `undefined!` is the standard non-null-assertion way to satisfy
- *  the compiler while passing the falsy sentinel that the library expects. */
 function cbOk<T>(callback: (err: Error, value?: T) => void, value: T): void
 {
   callback(undefined!, value);
@@ -74,10 +83,9 @@ class ImmichWebdavUserManager implements webdav.ITestableUserManager
 
     if (cached)
     {
-      const storedBuf = cached.passwordBuf;
       const match =
-        storedBuf.length === passwordBuf.length &&
-        crypto.timingSafeEqual(storedBuf, passwordBuf);
+        cached.passwordBuf.length === passwordBuf.length &&
+        crypto.timingSafeEqual(cached.passwordBuf, passwordBuf);
 
       if (match)
       {
@@ -86,7 +94,6 @@ class ImmichWebdavUserManager implements webdav.ITestableUserManager
         return;
       }
 
-      // Different password for the same username → evict stale session.
       cached.user.fsBackend.logout().catch(() => { });
       userCache.delete(username);
     }
@@ -108,7 +115,7 @@ class ImmichWebdavUserManager implements webdav.ITestableUserManager
 }
 
 // ──────────────────────────────────────────────────────────────
-// Write stream: buffer to tmp file, then commit via VirtualFileSystem
+// Upload stream — identical semantics to SFTP tmp‑file writes
 // ──────────────────────────────────────────────────────────────
 
 class WebdavUploadStream extends Writable
@@ -126,16 +133,12 @@ class WebdavUploadStream extends Writable
     this.writeStream = fs.createWriteStream(this.tmpFile.name);
   }
 
-  override _write(
-    chunk: Buffer,
-    _encoding: BufferEncoding,
-    callback: (error?: Error | null) => void,
-  ): void
+  override _write(chunk: Buffer, _enc: BufferEncoding, cb: (err?: Error | null) => void): void
   {
-    this.writeStream.write(chunk, callback);
+    this.writeStream.write(chunk, cb);
   }
 
-  override _final(callback: (error?: Error | null) => void): void
+  override _final(cb: (err?: Error | null) => void): void
   {
     this.writeStream.end(async () =>
     {
@@ -147,60 +150,40 @@ class WebdavUploadStream extends Writable
           Math.floor(Date.now() / 1000),
         );
         this.completed = true;
-        callback();
+        cb();
       } catch (err)
       {
-        callback(err as Error);
+        cb(err as Error);
       }
     });
   }
 
-  override _destroy(
-    error: Error | null,
-    callback: (error?: Error | null) => void,
-  ): void
+  override _destroy(error: Error | null, cb: (err?: Error | null) => void): void
   {
     this.writeStream.destroy();
-    if (!this.completed)
-    {
-      this.tmpFile.removeCallback();
-    }
-    callback(error);
+    if (!this.completed) this.tmpFile.removeCallback();
+    cb(error);
   }
 }
 
 // ──────────────────────────────────────────────────────────────
-// Serializer (no persistence needed)
+// Serializer
 // ──────────────────────────────────────────────────────────────
 
 class NoopSerializer implements webdav.FileSystemSerializer
 {
-  uid(): string
+  uid(): string { return 'ImmichWebdavSerializer_1.0.0'; }
+  serialize(_fs: webdav.FileSystem, cb: webdav.ReturnCallback<unknown>): void { cb(undefined, {}); }
+  unserialize(_data: unknown, cb: webdav.ReturnCallback<webdav.FileSystem>): void
   {
-    return 'ImmichWebdavSerializer_1.0.0';
-  }
-  serialize(
-    _fs: webdav.FileSystem,
-    callback: webdav.ReturnCallback<unknown>,
-  ): void
-  {
-    callback(undefined, {});
-  }
-  unserialize(
-    _data: unknown,
-    callback: webdav.ReturnCallback<webdav.FileSystem>,
-  ): void
-  {
-    callback(undefined, new ImmichWebdavFileSystem());
+    cb(undefined, new ImmichWebdavFileSystem());
   }
 }
 
 // ──────────────────────────────────────────────────────────────
-// FileSystem: bridge between webdav-server and VirtualFileSystem
+// Shared lock + property managers
 // ──────────────────────────────────────────────────────────────
 
-// Lock and property managers are shared across users because WebDAV locks are
-// server-scoped (identified by tokens), not user-scoped.
 const lockManagers = new Map<string, webdav.LocalLockManager>();
 const propManagers = new Map<string, webdav.LocalPropertyManager>();
 
@@ -232,6 +215,10 @@ function getBackend(ctx: webdav.IContextInfo): VirtualFileSystem | null
   return user?.fsBackend ?? null;
 }
 
+// ──────────────────────────────────────────────────────────────
+// WebDAV FileSystem — now identical to SFTP behavior
+// ──────────────────────────────────────────────────────────────
+
 class ImmichWebdavFileSystem extends webdav.FileSystem
 {
   constructor()
@@ -260,252 +247,169 @@ class ImmichWebdavFileSystem extends webdav.FileSystem
     callback(undefined, getPropManager(path.toString()));
   }
 
-  protected _type(
-    path: webdav.Path,
-    ctx: webdav.TypeInfo,
-    callback: webdav.ReturnCallback<webdav.ResourceType>,
-  ): void
+  // ── type detection ──────────────────────────────────────────
+
+  protected _type(path: webdav.Path, ctx: webdav.TypeInfo, cb: webdav.ReturnCallback<webdav.ResourceType>): void
   {
-    if (path.isRoot())
-    {
-      callback(undefined, webdav.ResourceType.Directory);
-      return;
-    }
     const backend = getBackend(ctx);
-    if (!backend)
-    {
-      callback(webdav.Errors.ResourceNotFound);
-      return;
-    }
-    backend
-      .stat(path.toString())
-      .then((stat) =>
+    if (!backend) return cb(webdav.Errors.ResourceNotFound);
+
+    const p = normalizePath(path.toString());
+
+    if (p === '/')
+      return cb(undefined, webdav.ResourceType.Directory);
+
+    backend.stat(p)
+      .then(stat =>
       {
-        if (!stat)
-        {
-          callback(webdav.Errors.ResourceNotFound);
-          return;
-        }
-        callback(
-          undefined,
-          stat.isDir ? webdav.ResourceType.Directory : webdav.ResourceType.File,
-        );
+        if (!stat) return cb(webdav.Errors.ResourceNotFound);
+        cb(undefined, stat.isDir ? webdav.ResourceType.Directory : webdav.ResourceType.File);
       })
-      .catch((err) => callback(err));
+      .catch(err => cb(err));
   }
 
-  // ── directory listing ──────────────────────────────────────
+  // ── directory listing (match SFTP) ──────────────────────────
 
-  protected _readDir(
-    path: webdav.Path,
-    ctx: webdav.ReadDirInfo,
-    callback: webdav.ReturnCallback<string[] | webdav.Path[]>,
-  ): void
+  protected _readDir(path: webdav.Path, ctx: webdav.ReadDirInfo, cb: webdav.ReturnCallback<string[]>): void
   {
     const backend = getBackend(ctx);
-    if (!backend)
-    {
-      callback(webdav.Errors.ResourceNotFound);
-      return;
-    }
-    backend
-      .listFiles(path.toString())
-      .then((files) => callback(undefined, files.map((f) => f.name)))
-      .catch((err) => callback(err));
-  }
+    if (!backend) return cb(webdav.Errors.ResourceNotFound);
 
-  // ── file metadata ──────────────────────────────────────────
+    const p = normalizePath(path.toString());
 
-  protected _size(
-    path: webdav.Path,
-    ctx: webdav.SizeInfo,
-    callback: webdav.ReturnCallback<number>,
-  ): void
-  {
-    const backend = getBackend(ctx);
-    if (!backend)
-    {
-      callback(webdav.Errors.ResourceNotFound);
-      return;
-    }
-    backend
-      .stat(path.toString())
-      .then((stat) =>
+    backend.listFiles(p)
+      .then(files =>
       {
-        if (!stat)
-        {
-          callback(webdav.Errors.ResourceNotFound);
-          return;
-        }
-        callback(undefined, stat.size);
+        const names = ['.', '..', ...files.map(f => f.name)];
+        cb(undefined, names);
       })
-      .catch((err) => callback(err));
+      .catch(err => cb(err));
   }
 
-  protected _lastModifiedDate(
-    path: webdav.Path,
-    ctx: webdav.LastModifiedDateInfo,
-    callback: webdav.ReturnCallback<number>,
-  ): void
+  // ── metadata ────────────────────────────────────────────────
+
+  protected _size(path: webdav.Path, ctx: webdav.SizeInfo, cb: webdav.ReturnCallback<number>): void
   {
     const backend = getBackend(ctx);
-    if (!backend)
-    {
-      callback(webdav.Errors.ResourceNotFound);
-      return;
-    }
-    backend
-      .stat(path.toString())
-      .then((stat) =>
+    if (!backend) return cb(webdav.Errors.ResourceNotFound);
+
+    const p = normalizePath(path.toString());
+
+    backend.stat(p)
+      .then(stat =>
       {
-        if (!stat)
-        {
-          callback(webdav.Errors.ResourceNotFound);
-          return;
-        }
-        callback(undefined, stat.mtime * 1000);
+        if (!stat) return cb(webdav.Errors.ResourceNotFound);
+        cb(undefined, stat.size);
       })
-      .catch((err) => callback(err));
+      .catch(err => cb(err));
   }
 
-  protected _creationDate(
-    path: webdav.Path,
-    ctx: webdav.CreationDateInfo,
-    callback: webdav.ReturnCallback<number>,
-  ): void
-  {
-    // Immich doesn't separate creation date from modification date at this
-    // level; delegate to _lastModifiedDate for a reasonable approximation.
-    this._lastModifiedDate(
-      path,
-      ctx as unknown as webdav.LastModifiedDateInfo,
-      callback,
-    );
-  }
-
-  // ── read / write ──────────────────────────────────────────
-
-  protected _openReadStream(
-    path: webdav.Path,
-    ctx: webdav.OpenReadStreamInfo,
-    callback: webdav.ReturnCallback<Readable>,
-  ): void
+  protected _lastModifiedDate(path: webdav.Path, ctx: webdav.LastModifiedDateInfo, cb: webdav.ReturnCallback<number>): void
   {
     const backend = getBackend(ctx);
-    if (!backend)
-    {
-      callback(webdav.Errors.ResourceNotFound);
-      return;
-    }
-    backend
-      .readFile(path.toString())
-      .then((tmpFile) =>
+    if (!backend) return cb(webdav.Errors.ResourceNotFound);
+
+    const p = normalizePath(path.toString());
+
+    backend.stat(p)
+      .then(stat =>
+      {
+        if (!stat) return cb(webdav.Errors.ResourceNotFound);
+        cb(undefined, stat.mtime * 1000);
+      })
+      .catch(err => cb(err));
+  }
+
+  protected _creationDate(path: webdav.Path, ctx: webdav.CreationDateInfo, cb: webdav.ReturnCallback<number>): void
+  {
+    this._lastModifiedDate(path, ctx as any, cb);
+  }
+
+  // ── read stream (identical tmp semantics to SFTP) ───────────
+
+  protected _openReadStream(path: webdav.Path, ctx: webdav.OpenReadStreamInfo, cb: webdav.ReturnCallback<Readable>): void
+  {
+    const backend = getBackend(ctx);
+    if (!backend) return cb(webdav.Errors.ResourceNotFound);
+
+    const p = normalizePath(path.toString());
+
+    backend.readFile(p)
+      .then(tmpFile =>
       {
         const stream = fs.createReadStream(tmpFile.name);
         stream.once('close', () => tmpFile.removeCallback());
         stream.once('error', () => tmpFile.removeCallback());
-        callback(undefined, stream);
+        cb(undefined, stream);
       })
-      .catch((err) => callback(err));
+      .catch(err => cb(err));
   }
 
-  protected _openWriteStream(
-    path: webdav.Path,
-    ctx: webdav.OpenWriteStreamInfo,
-    callback: webdav.ReturnCallback<Writable>,
-  ): void
+  // ── write stream (identical to SFTP tmp‑write) ──────────────
+
+  protected _openWriteStream(path: webdav.Path, ctx: webdav.OpenWriteStreamInfo, cb: webdav.ReturnCallback<Writable>): void
   {
     const backend = getBackend(ctx);
-    if (!backend)
-    {
-      callback(webdav.Errors.ResourceNotFound);
-      return;
-    }
-    callback(undefined, new WebdavUploadStream(path.toString(), backend));
+    if (!backend) return cb(webdav.Errors.ResourceNotFound);
+
+    const p = normalizePath(path.toString());
+
+    cb(undefined, new WebdavUploadStream(p, backend));
   }
 
-  // ── create / delete / rename / move ──────────────────────
+  // ── create / delete / rename / move (match SFTP) ────────────
 
-  protected _create(
-    path: webdav.Path,
-    ctx: webdav.CreateInfo,
-    callback: webdav.SimpleCallback,
-  ): void
+  protected _create(path: webdav.Path, ctx: webdav.CreateInfo, cb: webdav.SimpleCallback): void
   {
     const backend = getBackend(ctx);
-    if (!backend)
-    {
-      callback(webdav.Errors.ResourceNotFound);
-      return;
-    }
+    if (!backend) return cb(webdav.Errors.ResourceNotFound);
+
+    const p = normalizePath(path.toString());
+
     if (ctx.type.isDirectory)
     {
-      backend
-        .mkdir(path.toString())
-        .then(() => callback())
-        .catch((err) => callback(err));
-    } else
+      backend.mkdir(p).then(() => cb()).catch(err => cb(err));
+    }
+    else
     {
-      // File creation is handled by the subsequent _openWriteStream call.
-      callback();
+      cb(); // file creation handled by write stream
     }
   }
 
-  protected _delete(
-    path: webdav.Path,
-    ctx: webdav.DeleteInfo,
-    callback: webdav.SimpleCallback,
-  ): void
+  protected _delete(path: webdav.Path, ctx: webdav.DeleteInfo, cb: webdav.SimpleCallback): void
   {
     const backend = getBackend(ctx);
-    if (!backend)
-    {
-      callback(webdav.Errors.ResourceNotFound);
-      return;
-    }
-    backend
-      .remove(path.toString())
-      .then(() => callback())
-      .catch((err) => callback(err));
+    if (!backend) return cb(webdav.Errors.ResourceNotFound);
+
+    const p = normalizePath(path.toString());
+
+    backend.remove(p).then(() => cb()).catch(err => cb(err));
   }
 
-  protected _rename(
-    pathFrom: webdav.Path,
-    newName: string,
-    ctx: webdav.RenameInfo,
-    callback: webdav.ReturnCallback<boolean>,
-  ): void
+  protected _rename(pathFrom: webdav.Path, newName: string, ctx: webdav.RenameInfo, cb: webdav.ReturnCallback<boolean>): void
   {
     const backend = getBackend(ctx);
-    if (!backend)
-    {
-      callback(webdav.Errors.ResourceNotFound);
-      return;
-    }
-    const pathTo = pathFrom.getParent().getChildPath(newName);
-    backend
-      .rename(pathFrom.toString(), pathTo.toString())
-      .then(() => callback(undefined, true))
-      .catch((err) => callback(err));
+    if (!backend) return cb(webdav.Errors.ResourceNotFound);
+
+    const oldPath = normalizePath(pathFrom.toString());
+    const newPath = normalizePath(pathFrom.getParent().getChildPath(newName).toString());
+
+    backend.rename(oldPath, newPath)
+      .then(() => cb(undefined, true))
+      .catch(err => cb(err));
   }
 
-  protected _move(
-    pathFrom: webdav.Path,
-    pathTo: webdav.Path,
-    ctx: webdav.MoveInfo,
-    callback: webdav.ReturnCallback<boolean>,
-  ): void
+  protected _move(pathFrom: webdav.Path, pathTo: webdav.Path, ctx: webdav.MoveInfo, cb: webdav.ReturnCallback<boolean>): void
   {
     const backend = getBackend(ctx);
-    if (!backend)
-    {
-      callback(webdav.Errors.ResourceNotFound);
-      return;
-    }
-    backend
-      .rename(pathFrom.toString(), pathTo.toString())
-      .then(() => callback(undefined, true))
-      .catch((err) => callback(err));
+    if (!backend) return cb(webdav.Errors.ResourceNotFound);
+
+    const oldPath = normalizePath(pathFrom.toString());
+    const newPath = normalizePath(pathTo.toString());
+
+    backend.rename(oldPath, newPath)
+      .then(() => cb(undefined, true))
+      .catch(err => cb(err));
   }
 }
 
@@ -539,9 +443,7 @@ export class WebdavProtocolServer implements TransferProtocolServer
           reject(new Error('WebDAV server failed to start'));
           return;
         }
-        console.log(
-          `WebDAV server listening on ${config.listenHost}:${config.webdavPort}`,
-        );
+        logger.info(`WebDAV`, 'SERVER', `WebDAV server listening on ${config.listenHost}:${config.webdavPort}`);
         resolve();
       });
     });

@@ -4,9 +4,10 @@ import tmp from 'tmp';
 import { Writable } from 'stream';
 import FtpSrv, { FileSystem, GeneralError, FtpConnection } from 'ftp-srv';
 import { config } from '../config';
-import { ImmichFileSystem } from '../filesystem/immich/immich-file-system';
+import { ImmichFileSystem } from '../immich/immich-file-system';
 import { VirtualFileSystem } from '../filesystem/virtual-file-system';
 import { TransferProtocolServer } from './transfer-protocol-server';
+import { logger } from '../logger';
 
 interface FtpStat
 {
@@ -240,14 +241,14 @@ export class FtpProtocolServer implements TransferProtocolServer
 
     this.ftpServer.on('client-error', ({ error }) =>
     {
-      console.error('FTP client error:', error);
+      logger.error(`FTP`, 'SERVER', 'FTP client error:', error);
     });
   }
 
   async start(): Promise<void>
   {
     await this.ftpServer.listen();
-    console.log(`FTP server listening on ${config.listenHost}:${config.ftpPort}`);
+    logger.info(`FTP`, 'SERVER', `server listening on ${config.listenHost}:${config.ftpPort}`);
   }
 }
 

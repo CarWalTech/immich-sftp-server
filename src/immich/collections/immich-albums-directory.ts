@@ -1,0 +1,39 @@
+
+import { VirtualDirectory } from "../../filesystem/virtual-directory";
+import { VirtualNode } from "../../filesystem/virtual-node";
+import { VirtualMetadata } from '../../filesystem/virtual-metadata';
+import { PathUtils } from "../../utils/path-utils";
+import { ImmichFileSystem } from "../immich-file-system";
+import { ImmichRootDirectory } from "./immich-root-directory";
+import { ImmichAlbumFolder } from "./immich-album-folder";
+import { getVirtualAlbumTree, ImmichAlbumDirectoryInfo } from '../utils/immich-api-utils';
+import { ImmichAlbumsDirectoryNode } from "../utils/immich-api-utils";
+import { ImmichVirtualDirectory } from "./immich-virtual-directory";
+
+export class ImmichAlbumsDirectory extends ImmichVirtualDirectory
+{
+    constructor(file_system: ImmichFileSystem, root: ImmichRootDirectory)
+    {
+        super(file_system, "albums", undefined, root, { refreshOnReadDir: true })
+    }
+
+    async event_stat(): Promise<VirtualMetadata>
+    {
+        return VirtualMetadata.directory_ro(this.name, Math.floor(Date.now() / 1000))
+    }
+    async event_mkdir(albumName: string): Promise<boolean>
+    {
+        await this.file_system.getApi().SERVER_CreateAlbum(albumName)
+        this.refresh()
+        return true
+    }
+    async event_rebuild(): Promise<Map<string, VirtualNode>>
+    {
+        const current_file_tree = await this.file_system.getApi().FETCH_VirtualAlbumTree();
+        if (current_file_tree == null)
+            return new Map()
+        else
+            return new Map([...current_file_tree.children.values()].map(node => ([node.fsName, new ImmichAlbumFolder(this.file_system, this, this, node)])))
+    }
+}
+
