@@ -4,29 +4,52 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "up docker",
-            "type": "shell",
-            "command": "docker compose -f docker-compose.yaml up"
+            "label": "docker-run: debug",
+            "dependsOn": [
+                "docker-compose: rm-debug",
+                "docker-compose: up-debug"
+            ]
         },
         {
-            "label": "build docker",
+            "label": "docker-compose: up-debug",
             "type": "shell",
-            "command": "docker compose -f docker-compose.yaml up --build"
+            "command": "docker compose -f docker-compose.yml -f docker-compose.override.yml up --build -d",
+            "presentation": {
+                "close": true
+            }
         },
         {
-            "label": "down docker",
+            "label": "docker-compose: rm-debug",
             "type": "shell",
-            "command": "docker compose -f docker-compose.yaml down"
+            "command": "docker compose -f docker-compose.yml rm -f",
+            "presentation": {
+                "close": true
+            }
         },
         {
-            "label": "remove docker",
+            "label": "docker-compose: up-debug",
             "type": "shell",
-            "command": "docker compose -f docker-compose.yaml rm"
+            "command": "docker compose -f docker-compose.yml up --build"
         },
         {
-            "label": "stop docker",
+            "label": "docker-compose: up",
             "type": "shell",
-            "command": "docker compose -f docker-compose.yaml down"
+            "command": "docker compose -f docker-compose.yml up"
+        },
+        {
+            "label": "docker-compose: build",
+            "type": "shell",
+            "command": "docker compose -f docker-compose.yml build"
+        },
+        {
+            "label": "docker-compose: down",
+            "type": "shell",
+            "command": "docker compose -f docker-compose.yml down"
+        },
+        {
+            "label": "docker-compose: rm",
+            "type": "shell",
+            "command": "docker compose -f docker-compose.yml rm"
         }
     ]
 }

@@ -1,65 +1,24 @@
-########################################
-# Build Stage: Compiles TypeScript app
-########################################
-FROM node:20 AS builder
-
-# Set working directory inside the container
-WORKDIR /app
-
-# Copy package metadata first for better layer caching
-COPY package*.json ./
-
-# Install dependencies including dev dependencies for building
-RUN npm ci --loglevel=error --no-audit --no-fund
-
-# Copy source files
-COPY . .
-
-# Compile TypeScript → JavaScript (output goes to /app/dist)
-RUN npm run build
-
-# Keep only production dependencies for runtime image
-RUN npm prune --omit=dev --loglevel=error --no-audit --no-fund
-
-
-
-########################################
-# Final Stage: Lightweight runtime image
-########################################
 FROM node:20-alpine
 
 # Set working directory
 WORKDIR /app
 
-# Install ONLY the SFTP subsystem binary (no sshd)
-RUN apk add --no-cache openssh-sftp-server
-
-# install ssh-keygen
-RUN apk add --no-cache --update openssh-keygen
-
-# install libssh-dev
-RUN apk add --no-cache --update libssh-dev
-
-RUN npm install -g ts-node
-
 # Copy package metadata first for better layer caching
 COPY package*.json ./
 
-# Install dependencies including dev dependencies for building
-RUN npm ci --loglevel=error --no-audit --no-fund
+# Install ALL dependencies
+RUN npm install --loglevel=error --no-audit --no-fund 
+
+RUN npm install -g ts-node ts-node-dev
 
 # Copy source files
 COPY . .
 
-# Only copy compiled JS code, package metadata, and production dependencies from builder
-#COPY --from=builder /app/dist ./dist
-#COPY --from=builder /app/package*.json ./
-#COPY --from=builder /app/node_modules ./node_modules
-
-# Expose SFTP, FTP control, and WebDAV ports
+# Expose SFTP + debug ports
 EXPOSE 22
 EXPOSE 21
 EXPOSE 1900
+EXPOSE 9229
 
-# Default command to run transfer servers bootstrap
-CMD ["ts-node", "/app/src/server.ts"]
+# Default command for debugging with ts-node
+CMD ["ts-node", "src/server.ts"]

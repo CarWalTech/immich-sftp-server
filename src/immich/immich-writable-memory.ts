@@ -156,7 +156,6 @@ export class ImmichWritableMemory
         oldName = normalizePath(oldName);
         newName = normalizePath(newName);
         const entry = this.find(oldName);
-        if (!entry) throw new Error('File not found');
 
         if (!entry)
         {

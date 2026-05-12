@@ -15,6 +15,7 @@ export class VirtualDirectory extends VirtualNode
     private _sendFunction?: VirtualDirectoryMoveItemFn
     private _refreshOnMoveNode: boolean = false
     private _refreshOnReadDir: boolean = false
+    private _rebuildPromise: Promise<Map<string, VirtualNode>> | null = null;
 
     constructor(name: string, mtime: number = Date.now(), parent: VirtualNode | null = null, options?: VirtualDirectoryOptions)
     {
@@ -35,7 +36,6 @@ export class VirtualDirectory extends VirtualNode
 
     isDir() { return true; }
     needsRefresh() { return false; }
-    getRefreshDelay() { return 200; }
 
     async node(name: string): Promise<VirtualNode | undefined>
     {
@@ -47,13 +47,24 @@ export class VirtualDirectory extends VirtualNode
         const results = await this.nodes_map(refresh);
         return [...results.values()];
     }
+
     async nodes_map(refresh?: boolean): Promise<Map<string, VirtualNode>>
     {
-        if (this._child_nodes !== null && !this._force_child_node_refresh && !this.needsRefresh() && refresh !== true) return this._child_nodes;
-        await new Promise(resolve => setTimeout(resolve, this.getRefreshDelay()));
-        this._child_nodes = await this.event_rebuild();
-        this._force_child_node_refresh = false;
-        return this._child_nodes;
+        if (this._child_nodes !== null && !this._force_child_node_refresh && !this.needsRefresh() && !refresh)
+            return this._child_nodes;
+
+        if (!this._rebuildPromise)
+        {
+            this._rebuildPromise = this.event_rebuild().then(result =>
+            {
+                this._child_nodes = result;
+                this._force_child_node_refresh = false;
+                this._rebuildPromise = null;
+                return result;
+            });
+        }
+
+        return this._rebuildPromise;
     }
 
     // #region Events

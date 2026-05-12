@@ -176,6 +176,7 @@ export class ImmichAPI
             const response = await axios.request({
                 method: method,
                 url: `${this.baseUrl}/api/${endpoint}`,
+                timeout: 30_000,
                 headers: {
                     ...(isDownload ? {} : { 'Accept': 'application/json' }),
                     'User-Agent': 'ImmichNetworkStorage (Linux)',
@@ -328,7 +329,7 @@ export class ImmichAPI
     public async FETCH_AssetsForTag(tag: ImmichTagDirectoryInfo): Promise<void>
     {
         // Fetch assets
-        const normal_items = await this.FETCH_AssetsByMetadata({ tagIds: [tag.id], visibility: "archive" })
+        const normal_items = await this.FETCH_AssetsByMetadata({ tagIds: [tag.id], visibility: "timeline" })
         const archived_items = await this.FETCH_AssetsByMetadata({ tagIds: [tag.id], visibility: "archive" })
 
         const all_assets: ImmichAsset[] = [...normal_items, ...archived_items]
