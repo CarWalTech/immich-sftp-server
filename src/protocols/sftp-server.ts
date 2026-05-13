@@ -251,6 +251,26 @@ async function SFTP_OPEN(self: SftpConnectionInstance, reqid: number, filename: 
     if (flags & WRITE_FLAGS)
     {
       entry.writeNode = new VirtualContentBuffer(tmp.fileSync());
+      entry.sha1 = crypto.createHash('sha1');
+      entry.sha1Offset = 0;
+    }
+    else
+    {
+      // Prefetch: kick off the download immediately so it overlaps with the
+      // client-server round trip before the first READ arrives.
+      entry.readInitPromise = (async () =>
+      {
+        const backendResult = await self.fsBackend.readFile(entry.path);
+        if (backendResult instanceof VirtualContentBuffer)
+          entry.readNode = backendResult;
+        else if (Buffer.isBuffer(backendResult))
+          entry.readNode = new VirtualContentBuffer(undefined, backendResult);
+        else
+          entry.readNode = new VirtualContentBuffer(backendResult);
+        entry.readSize = entry.readNode!.size;   // cache once; avoids per-READ statSync
+      })();
+      // Suppress unhandled-rejection warning in the window before the first READ
+      void entry.readInitPromise.catch(() => {});
     }
 
     self.handleMap[key] = entry;
@@ -298,7 +318,9 @@ async function SFTP_READ(self: SftpConnectionInstance, reqid: number, handle: Bu
     await entry.readInitPromise;
 
     const node = entry.readNode!;
-    if (offset >= node.size)
+    // Prefer the size cached on OPEN to avoid a statSync on every READ request
+    const fileSize = entry.readSize ?? node.size;
+    if (offset >= fileSize)
     {
       return self.sftpStream.status(reqid, SFTP_STATUS_CODE.EOF);
     }
@@ -330,7 +352,22 @@ async function SFTP_WRITE(self: SftpConnectionInstance, reqid: number, handle: B
     }
 
     entry.writeNode.write(offset, data);
-    self.fsBackend.writeFile(entry.path, entry.writeNode)
+
+    // Update incremental SHA-1 while writes arrive sequentially.
+    // If an out-of-order write is detected, disable and fall back to full re-hash at upload time.
+    if (entry.sha1 !== undefined)
+    {
+      if (offset === entry.sha1Offset)
+      {
+        entry.sha1.update(data);
+        entry.sha1Offset! += data.length;
+      }
+      else
+      {
+        entry.sha1 = undefined;   // out-of-order — incremental hash is no longer valid
+      }
+    }
+
     self.sftpStream.status(reqid, SFTP_STATUS_CODE.OK);
   }
   catch (e)
@@ -360,6 +397,11 @@ async function SFTP_CLOSE(self: SftpConnectionInstance, reqid: number, handle: B
 
     if (entry.writeNode)
     {
+      // Attach the pre-computed checksum so the upload path can skip re-hashing
+      if (entry.sha1)
+      {
+        entry.writeNode.checksum = entry.sha1.digest('base64');
+      }
       await self.fsBackend.writeFile(entry.path, entry.writeNode);
     }
 
@@ -852,6 +894,9 @@ export interface SftpHandleEntry
   readNode?: VirtualContentBuffer;
   writeNode?: VirtualContentBuffer;
   readInitPromise?: Promise<void> | null;
+  readSize?: number;        // file size cached after download; avoids per-READ statSync
+  sha1?: crypto.Hash;      // running hash for incremental checksum during sequential writes
+  sha1Offset?: number;     // next expected write offset; undefined → out-of-order detected
 }
 
 // #endregion

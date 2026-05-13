@@ -7,6 +7,7 @@ export class VirtualContentBuffer
 {
     tmp?: tmp.FileResult;
     buffer?: Buffer;
+    checksum?: string;      // pre-computed SHA-1 base64; set by SFTP write path to skip re-hash on upload
 
     constructor(tmp?: tmp.FileResult, buffer?: Buffer)
     {
@@ -53,9 +54,9 @@ export class VirtualContentBuffer
         if (this.tmp)
         {
             const fd = this.tmp.fd;
-            const out = Buffer.alloc(length);
+            const out = Buffer.allocUnsafe(length);  // readSync overwrites every byte; zeroing is wasteful
             const bytes = fs.readSync(fd, out, 0, length, offset);
-            return out.slice(0, bytes);
+            return out.subarray(0, bytes);
         }
 
         if (this.buffer)

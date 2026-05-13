@@ -81,7 +81,9 @@ export class ImmichFileSystem implements VirtualFileSystem
         if (node && !node.isDir()) await (node as VirtualFile).event_writefile(tmpFile);
         else if (parent && parent.isDir())
         {
-            await parent.event_createfile(name, tmpFile)
+            await parent.event_createfile(name, tmpFile);
+            // Trigger upload immediately rather than waiting for a stat() call
+            await this.memory.flushQueued(filename);
         }
         else throw new Error("Cannot write to destination");
     }

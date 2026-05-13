@@ -509,16 +509,23 @@ export class ImmichAPI
 
         logger.info(`ImmichAPI`, 'QUEUE', `Uploading: ${filename}`);
 
-        // Compute SHA-1
-        const hash = crypto.createHash('sha1');
-        if (node.isTmp)
+        // Use the pre-computed SHA-1 set by the SFTP write path (incremental, no re-read).
+        // Fall back to a full read for FTP/WebDAV uploads where no checksum was pre-computed.
+        let checksum: string;
+        if (node.checksum)
         {
-            await pipeline(fs.createReadStream(node.name), hash);
-        } else
-        {
-            hash.update(node.buffer!);
+            checksum = node.checksum;
+            logger.info(`ImmichAPI`, 'QUEUE', `Using pre-computed checksum for '${filename}'`);
         }
-        const checksum = hash.digest('base64');
+        else
+        {
+            const hash = crypto.createHash('sha1');
+            if (node.isTmp)
+                await pipeline(fs.createReadStream(node.name), hash);
+            else
+                hash.update(node.buffer!);
+            checksum = hash.digest('base64');
+        }
 
         // Bulk check
         const bulkCheckResponse = await this.SERVER_ValidateUpload(checksum, filename);

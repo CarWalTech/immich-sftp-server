@@ -135,21 +135,34 @@ export class ImmichWritableMemory
     {
         filename = normalizePath(filename);
         const entry = this.find(filename);
-        if (!entry) return null
+        if (!entry) return null;
 
-        if (entry.type === "queue")
-        {
-            await this.immich_fs.getApi().QUEUE_UploadFile((entry.item as ImmichUploadQueueItem), new Date().getTime() / 1000);
-            await this.immich_fs.getApi().QUEUE_Splice(this.entries.findIndex(e => e.longname === filename), 1)
-
-            return VirtualMetadata.file_rw(filename, 0, new Date().getTime() / 1000);
-        }
-        else if (entry.type === "tmp")
-        {
-            return VirtualMetadata.file_rw(filename, 0, new Date().getTime() / 1000);
-        }
+        // Upload is now triggered directly by writeFile → flushQueued.
+        // stat() just confirms the file is known so the client gets a sensible response.
         return VirtualMetadata.file_rw(filename, 0, new Date().getTime() / 1000);
+    }
 
+    /**
+     * Upload and dequeue the first queue entry that matches filename.
+     * Called by ImmichFileSystem.writeFile immediately after event_createfile
+     * so the upload starts as soon as the file is closed, not on the next stat().
+     */
+    async flushQueued(filename: string): Promise<void>
+    {
+        const normalized = normalizePath(filename);
+        const index = this.entries.findIndex(e => e.longname === normalized);
+        if (index === -1) return;
+
+        const queueItem = this.entries[index];
+        try
+        {
+            await this.immich_fs.getApi().QUEUE_UploadFile(queueItem, Date.now() / 1000);
+        }
+        finally
+        {
+            // Always remove from queue regardless of upload success/failure
+            this.immich_fs.getApi().QUEUE_Splice(index, 1);
+        }
     }
 
     async rename(oldName: string, newName: string)
