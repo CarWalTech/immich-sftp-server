@@ -1,6 +1,7 @@
 
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
 import { VirtualNode } from "../../filesystem/virtual-node";
+import { VirtualContentBuffer } from '../../filesystem/virtual-content-buffer';
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { PathUtils } from "../../utils/path-utils";
 import { ImmichFileSystem } from "../immich-file-system";
@@ -35,7 +36,7 @@ export class ImmichRootUnsortedDirectory extends ImmichVirtualDirectory
     {
         return false
     }
-    async event_createfile(name: string, contents: FileResult): Promise<boolean>
+    async event_createfile(name: string, contents: VirtualContentBuffer): Promise<boolean>
     {
         await this.file_system.memory.push(name, this.fullpath, contents)
         return true;

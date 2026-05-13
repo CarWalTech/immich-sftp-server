@@ -1,6 +1,7 @@
 import tmp from "tmp";
 import { FileUtils } from "../utils/file-utils";
 import { VirtualNode } from "./virtual-node";
+import { VirtualContentBuffer } from './virtual-content-buffer';
 import { VirtualMetadata } from './virtual-metadata';
 import { logger } from "../logger";
 
@@ -30,17 +31,17 @@ export class VirtualFile extends VirtualNode
     {
         return;
     }
-    async event_readfile()
+    async event_readfile(): Promise<VirtualContentBuffer>
     {
         const content = await this.get_content();
-        return FileUtils.createTmpFile(content);
+        return FileUtils.tmpFromString(content)
     }
     async event_delete()
     {
         logger.error("VirtualFile", "Delete", "error", "Method Not Implemented")
         return false;
     }
-    async event_writefile(contents: tmp.FileResult): Promise<boolean>
+    async event_writefile(contents: VirtualContentBuffer): Promise<boolean>
     {
         logger.error("VirtualFile", "WriteFile", "error", "Method Not Implemented")
         return false
@@ -64,7 +65,7 @@ export class VirtualFile extends VirtualNode
         logger.error("VirtualFile", "SetAttributes", "error", "Method Not Implemented")
         return false
     }
-    async event_createfile(name: string, contents: tmp.FileResult): Promise<boolean>
+    async event_createfile(name: string, contents: VirtualContentBuffer): Promise<boolean>
     {
         logger.error("VirtualFile", "CreateFile", "error", "Method Not Implemented")
         return false

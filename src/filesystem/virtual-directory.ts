@@ -1,6 +1,7 @@
 import tmp from "tmp";
 import { VirtualFile } from "./virtual-file";
 import { VirtualNode } from "./virtual-node";
+import { VirtualContentBuffer } from './virtual-content-buffer';
 import { VirtualMetadata } from './virtual-metadata';
 import { logger } from "../logger";
 
@@ -99,11 +100,11 @@ export class VirtualDirectory extends VirtualNode
 
         return results;
     }
-    async event_readfile(): Promise<tmp.FileResult>
+    async event_readfile(): Promise<VirtualContentBuffer>
     {
         throw new Error("Not a file.")
     }
-    async event_writefile(content: tmp.FileResult): Promise<boolean>
+    async event_writefile(content: VirtualContentBuffer): Promise<boolean>
     {
         logger.error("VirtualDirectory", "WriteFile", "error", "Not a file")
         return false
@@ -125,7 +126,7 @@ export class VirtualDirectory extends VirtualNode
         logger.error("VirtualDirectory", "SetAttributes", "error", "Method Not Implemented")
         return false
     }
-    async event_createfile(name: string, contents: tmp.FileResult): Promise<boolean>
+    async event_createfile(name: string, contents: VirtualContentBuffer): Promise<boolean>
     {
         logger.error("VirtualDirectory", "CreateFile", "error", "Method Not Implemented")
         return false

@@ -1,6 +1,6 @@
 // prettier-ignore
-import tmp from 'tmp'
 import { VirtualMetadata } from './virtual-metadata';
+import { VirtualContentBuffer } from './virtual-content-buffer';
 
 export abstract class VirtualNode
 {
@@ -25,9 +25,9 @@ export abstract class VirtualNode
 
 
     abstract event_logout(): Promise<void>
-    abstract event_readfile(): Promise<tmp.FileResult>
-    abstract event_writefile(contents: tmp.FileResult): Promise<boolean>
-    abstract event_createfile(name: string, contents: tmp.FileResult): Promise<boolean>
+    abstract event_readfile(): Promise<VirtualContentBuffer>
+    abstract event_writefile(contents: VirtualContentBuffer): Promise<boolean>
+    abstract event_createfile(name: string, contents: VirtualContentBuffer): Promise<boolean>
     abstract event_mkdir(name: string): Promise<boolean>
     abstract event_delete(recursive?: boolean): Promise<boolean>
     abstract event_stat(): Promise<VirtualMetadata>

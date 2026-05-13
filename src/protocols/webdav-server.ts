@@ -13,6 +13,7 @@ import { VirtualFileSystem } from '../filesystem/virtual-file-system';
 import { TransferProtocolServer } from './transfer-protocol-server';
 import { logger } from '../logger';
 import path from 'path';
+import { VirtualContentBuffer } from '../filesystem/virtual-content-buffer';
 
 // ──────────────────────────────────────────────────────────────
 // Shared path normalization (identical to SFTP)
@@ -144,7 +145,7 @@ class WebdavUploadStream extends Writable
     {
       try
       {
-        await this.fsBackend.writeFile(this.targetPath, this.tmpFile);
+        await this.fsBackend.writeFile(this.targetPath, new VirtualContentBuffer(this.tmpFile));
         await this.fsBackend.setAttributes(
           this.targetPath,
           Math.floor(Date.now() / 1000),
@@ -337,7 +338,7 @@ class ImmichWebdavFileSystem extends webdav.FileSystem
     backend.readFile(p)
       .then(tmpFile =>
       {
-        const stream = fs.createReadStream(tmpFile.name);
+        const stream = tmpFile.createReadStream();
         stream.once('close', () => tmpFile.removeCallback());
         stream.once('error', () => tmpFile.removeCallback());
         cb(undefined, stream);

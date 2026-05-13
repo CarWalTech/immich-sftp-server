@@ -21,6 +21,7 @@ export class Config
   immichHost: string
   immichDefaults: UserScopedConfig
 
+
   // ip/port
   listenHost: string
 
@@ -42,6 +43,7 @@ export class Config
   // server settings
   TZ: string
   readBatchSize: number
+  localFilesMode: boolean
 
 
   constructor()
@@ -82,7 +84,7 @@ export class Config
     // server settings
     this.TZ = getEnvOrDefault('TZ', 'UTC');
     this.readBatchSize = getEnvNumber('READ_BATCH_SIZE', 50);
-
+    this.localFilesMode = getEnvBoolean('LOCAL_FILES_MODE', false);
   }
 };
 
