@@ -9,6 +9,7 @@ import { ImmichRootDirectory } from "./collections/immich-root-directory";
 import { ImmichWritableMemory } from "./immich-writable-memory";
 import { VirtualFsUtils } from "../utils/virtual-fs-utils";
 import { logger } from "../logger";
+import { VirtualContentBuffer } from '../filesystem/virtual-content-buffer';
 
 
 
@@ -70,7 +71,7 @@ export class ImmichFileSystem implements VirtualFileSystem
         return await file.event_readfile();
     }
 
-    async writeFile(filename: string, tmpFile: tmp.FileResult)
+    async writeFile(filename: string, tmpFile: VirtualContentBuffer)
     {
         const is_tmp = await this.memory.write(filename, tmpFile)
         if (is_tmp) return;

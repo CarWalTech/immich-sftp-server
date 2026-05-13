@@ -1,6 +1,7 @@
 import { VirtualFile } from "../../filesystem/virtual-file";
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
 import { VirtualNode } from "../../filesystem/virtual-node";
+import { VirtualContentBuffer } from '../../filesystem/virtual-content-buffer';
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { PathUtils } from "../../utils/path-utils";
 import { ImmichFileSystem } from "../immich-file-system";
@@ -42,12 +43,12 @@ export class ImmichAlbumLinkFile extends VirtualFile
         // Metadata/link files are applied on CLOSE and don't need SETSTAT handling
         return true;
     }
-    async event_readfile(): Promise<FileResult>
+    async event_readfile(): Promise<VirtualContentBuffer>
     {
         await this.file_system.getApi().FETCH_AssetsForAlbum(this.album);
-        return FileUtils.createTmpFile(buildAlbumBrowserLinkForAlbum(this.album, this.file_system.getUrl()));
+        return FileUtils.tmpFromString(buildAlbumBrowserLinkForAlbum(this.album, this.file_system.getUrl()));
     }
-    async event_writefile(contents: FileResult): Promise<boolean>
+    async event_writefile(contents: VirtualContentBuffer): Promise<boolean>
     {
         //Since this is virtual, reject
         return false;

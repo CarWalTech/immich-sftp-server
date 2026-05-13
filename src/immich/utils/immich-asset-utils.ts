@@ -113,6 +113,7 @@ export class ImmichAssetUtils
             originalFileName: asset.originalFileName,
             createdAt: asset.createdAt,
             updatedAt: asset.updatedAt,
+            originalPath: asset.originalPath,
             fileCreatedAt: asset.fileCreatedAt,
             fileModifiedAt: asset.fileModifiedAt,
             fileSizeInByte: asset.exifInfo?.fileSizeInByte ?? 0,
@@ -125,6 +126,7 @@ export interface ImmichAsset
 {
     id: string;
     originalFileName: string;
+    originalPath: string;
     createdAt?: string;
     updatedAt?: string;
     fileCreatedAt: string;

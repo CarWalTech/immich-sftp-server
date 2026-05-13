@@ -15,4 +15,5 @@ services:
     volumes:
       - /omv/apps-compose/immich-network-storage/data:/data
       - /omv/apps-compose/immich-network-storage/config:/config
+      - ${IMMICH_UPLOAD_FOLDER}:/immich/data
     restart: unless-stopped

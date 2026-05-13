@@ -1,6 +1,7 @@
 import { FileResult } from "tmp";
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
 import { VirtualNode } from "../../filesystem/virtual-node";
+import { VirtualContentBuffer } from '../../filesystem/virtual-content-buffer';
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { ImmichFileSystem } from "../immich-file-system";
 import { ImmichAlbumsDirectory } from "./immich-albums-directory";
@@ -48,7 +49,7 @@ export class ImmichRootDirectory extends VirtualDirectory
         return false
     }
 
-    async event_createfile(filename: string, contents: FileResult): Promise<boolean>
+    async event_createfile(filename: string, contents: VirtualContentBuffer): Promise<boolean>
     {
         logger.error('ImmichVirtualRootDirectory', 'MkDir', 'this directory is read-only');
         return false

@@ -1,8 +1,4 @@
 {
-    "DockerRun.DisableDockerrc": true,
-    "DockerRun.Containers": [
-        "1b2c5cdfcfae"
-    ],
     "remote.autoForwardPorts": true,
     "remote.restoreForwardedPorts": true,
     "remote.portsAttributes": {

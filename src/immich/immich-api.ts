@@ -18,6 +18,8 @@ import { DateTime } from 'luxon';
 import { ImmichAsset } from "./utils/immich-asset-utils";
 import { isObjectWithId } from "../utils/common-utils";
 import { logger } from '../logger';
+import { VirtualContentBuffer } from '../filesystem/virtual-content-buffer';
+import { FileUtils } from '../utils/file-utils';
 
 
 export class ImmichAPI
@@ -502,69 +504,67 @@ export class ImmichAPI
 
     public async QUEUE_UploadFile(fileEntry: ImmichUploadQueueItem, mtime: number)
     {
-        const filename = fileEntry.filename
-        logger.info(`ImmichAPI`, 'QUEUE', `Uploading: ${fileEntry.filename}`)
-        // Calculate SHA-1 checksum of the buffer
+        const node = fileEntry.node; // VirtualNodeBuffer
+        const filename = fileEntry.filename;
+
+        logger.info(`ImmichAPI`, 'QUEUE', `Uploading: ${filename}`);
+
+        // Compute SHA-1
         const hash = crypto.createHash('sha1');
-        await pipeline(fs.createReadStream(fileEntry.tmpFile.name), hash);
+        if (node.isTmp)
+        {
+            await pipeline(fs.createReadStream(node.name), hash);
+        } else
+        {
+            hash.update(node.buffer!);
+        }
         const checksum = hash.digest('base64');
 
-        // Check if the asset already exists using bulk-upload-check
+        // Bulk check
         const bulkCheckResponse = await this.SERVER_ValidateUpload(checksum, filename);
-
-        // Parse response
         const result = bulkCheckResponse.results[0];
         const action = result.action;
         let assetId = result.assetId;
-        const isTrashed = result.isTrashed;
-        const reason = result.reason;
-        logger.info(`ImmichAPI`, 'QUEUE', `Bulk check result for '${filename}': action=${action}, assetId=${assetId}, isTrashed=${isTrashed}, reason=${reason}`)
 
+        logger.info(`ImmichAPI`, 'QUEUE', `Bulk check result for '${filename}': action=${action}`);
 
-        // If the asset doen't exist, upload it
-        if (action == "accept")
+        if (action === "accept")
         {
-            // Prepare form data
             const data = new FormData();
-            const isoWithOffset = DateTime.fromSeconds(mtime, { zone: config.TZ }).toJSDate().toISOString();
-            data.append('fileModifiedAt', isoWithOffset);
-            data.append('fileCreatedAt', isoWithOffset);
-            data.append('deviceAssetId', filename); // Use fileName as deviceAssetId
+            const iso = DateTime.fromSeconds(mtime, { zone: config.TZ }).toJSDate().toISOString();
+
+            data.append('fileModifiedAt', iso);
+            data.append('fileCreatedAt', iso);
+            data.append('deviceAssetId', filename);
             data.append('deviceId', 'immich-network-storage');
 
-            // Add stream from tmp file
-            const readStream = fs.createReadStream(fileEntry.tmpFile.name);
-            data.append('assetData', readStream, { filename: filename });
+            // Stream from VirtualNodeBuffer
+            const readStream = node.createReadStream();
+            data.append('assetData', readStream, { filename });
 
-            // Send the upload request to Immich
             const uploadResponse = await this.SERVER_UploadAsset(data);
+            node.removeCallback(); // cleanup tmp or noop for buffer
 
-            // Close tmp file after successful upload
-            fileEntry.tmpFile.removeCallback();
-
-            // Get the new asset id
             assetId = uploadResponse.id;
         }
 
-        //Restore the asset if it is in the trash
-        if (action == "reject" && isTrashed == true)
+        // Restore if trashed
+        if (action === "reject" && result.isTrashed)
         {
-            if (fileEntry.removeFromOtherAlbums == true)
+            if (fileEntry.removeFromOtherAlbums)
             {
-                //Remove the trashed asset from other albums, in case it has some
-                const assigedAlbums = await this.FETCH_AlbumsForAssetId(assetId);
-                if (assigedAlbums && assigedAlbums.length > 0)
-                    for (const assigedAlbum of assigedAlbums)
-                        await this.SERVER_DeleteAssetFromAlbumOnly(assigedAlbum, assetId);
-
-                await this.SERVER_RestoreAsset(assetId); //Restore the asset from the trash
+                const assigned = await this.FETCH_AlbumsForAssetId(assetId);
+                for (const album of assigned)
+                    await this.SERVER_DeleteAssetFromAlbumOnly(album, assetId);
             }
-
+            await this.SERVER_RestoreAsset(assetId);
         }
 
-        // Add the new asset to the album
-        if (fileEntry.uploadToAlbum) await this.SERVER_AddAssetToAlbum(fileEntry.uploadToAlbum, assetId)
+        // Add to album
+        if (fileEntry.uploadToAlbum)
+            await this.SERVER_AddAssetToAlbum(fileEntry.uploadToAlbum, assetId);
     }
+
 
     // Server Functions
     // DELETE
@@ -694,8 +694,14 @@ export class ImmichAPI
             logAction: 'Bulk upload check'
         });
     }
-    async SERVER_ReadAsset(asset: ImmichAsset): Promise<tmp.FileResult>
+    async SERVER_ReadAsset(asset: ImmichAsset): Promise<VirtualContentBuffer>
     {
+        if (config.localFilesMode)
+        {
+            const filepath = "/immich" + asset.originalPath;
+            return FileUtils.tmpFromBuffer(fs.readFileSync(filepath));
+        }
+
         const endpoint = this.userSettings.assetDownloadSource === 'preview'
             ? `assets/${asset.id}/thumbnail`
             : `assets/${asset.id}/original`;
@@ -707,11 +713,29 @@ export class ImmichAPI
             respAsStream: true
         });
 
-        const tmpFile = tmp.fileSync();
-        const writeStream = fs.createWriteStream(tmpFile.name);
+        const node = FileUtils.tmp();
+        const writeStream = fs.createWriteStream(node.name);
+
         await pipeline(responseStream, writeStream);
-        return tmpFile;
+        return node;
     }
+
+    async SERVER_UploadNode(path: string, node: VirtualContentBuffer, mtime: number)
+    {
+        const data = new FormData();
+        const iso = DateTime.fromSeconds(mtime, { zone: config.TZ }).toJSDate().toISOString();
+
+        data.append('fileModifiedAt', iso);
+        data.append('fileCreatedAt', iso);
+        data.append('deviceAssetId', path);
+        data.append('deviceId', 'immich-network-storage');
+
+        data.append('assetData', node.createReadStream(), { filename: path });
+
+        return this.SERVER_UploadAsset(data);
+    }
+
+
     async SERVER_UploadAsset(data: any)
     {
         return await this.callApi({
@@ -736,7 +760,7 @@ export interface ImmichUploadQueueItem
 {
     filename: string;
     longname: string;
-    tmpFile: tmp.FileResult;
+    node: VirtualContentBuffer;
     uploadToAlbum?: ImmichAlbumDirectoryInfo;
     removeFromOtherAlbums?: boolean;
 }

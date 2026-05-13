@@ -6,6 +6,7 @@ import { ImmichUploadQueueItem } from "./immich-api";
 import { ImmichAlbumDirectoryInfo } from './utils/immich-api-utils';
 import path from "path";
 import { logger } from '../logger';
+import { VirtualContentBuffer } from '../filesystem/virtual-content-buffer';
 
 
 
@@ -35,7 +36,7 @@ export class ImmichWritableMemory
         return null
     }
 
-    async push_tmp(filename: string, fullpath: string, tmpFile: tmp.FileResult)
+    async push_tmp(filename: string, fullpath: string, tmpFile: VirtualContentBuffer)
     {
         var full_name = fullpath + "/" + filename;
         filename = normalizePath(filename);
@@ -52,7 +53,7 @@ export class ImmichWritableMemory
         return true;
     }
 
-    async push(filename: string, fullpath: string, tmpFile: tmp.FileResult, album?: ImmichAlbumDirectoryInfo)
+    async push(filename: string, fullpath: string, tmpFile: VirtualContentBuffer, album?: ImmichAlbumDirectoryInfo)
     {
         var full_name = fullpath + "/" + filename;
         filename = normalizePath(filename);
@@ -61,7 +62,7 @@ export class ImmichWritableMemory
         const data: ImmichUploadQueueItem = {
             filename: path.basename(full_name),
             longname: full_name,
-            tmpFile: tmpFile,
+            node: tmpFile,
             uploadToAlbum: album
         };
         this.immich_fs.getApi().QUEUE_AppendFile(data);
@@ -110,7 +111,7 @@ export class ImmichWritableMemory
         return null;
     }
 
-    async write(filename: string, tmpFile: tmp.FileResult)
+    async write(filename: string, tmpFile: VirtualContentBuffer)
     {
         // Normalize once
         const normalized = filename;
@@ -279,5 +280,5 @@ export interface MemoryEntry
 {
     filename: string;
     longname: string;
-    tmpFile: tmp.FileResult;
+    tmpFile: VirtualContentBuffer;
 }

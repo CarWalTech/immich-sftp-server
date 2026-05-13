@@ -8,6 +8,7 @@ import { ImmichFileSystem } from '../immich/immich-file-system';
 import { VirtualFileSystem } from '../filesystem/virtual-file-system';
 import { TransferProtocolServer } from './transfer-protocol-server';
 import { logger } from '../logger';
+import { VirtualContentBuffer } from '../filesystem/virtual-content-buffer';
 
 interface FtpStat
 {
@@ -44,7 +45,7 @@ class UploadToVirtualFileSystemStream extends Writable
     {
       try
       {
-        await this.fsBackend.writeFile(this.targetPath, this.tmpFile);
+        await this.fsBackend.writeFile(this.targetPath, new VirtualContentBuffer(this.tmpFile));
         await this.fsBackend.setAttributes(this.targetPath, Math.floor(Date.now() / 1000));
         this.completed = true;
         callback();
@@ -142,7 +143,7 @@ class ImmichFtpFileSystem extends FileSystem
   {
     const resolvedPath = normalizePath(fileName, this.currentDir);
     const tmpFile = await this.fsBackend.readFile(resolvedPath);
-    const stream = fs.createReadStream(tmpFile.name, start != null ? { start } : undefined);
+    const stream = tmpFile.createReadStream(start != null ? { start } : undefined)
     stream.once('close', () => tmpFile.removeCallback());
     stream.once('error', () => tmpFile.removeCallback());
     return {

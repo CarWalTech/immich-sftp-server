@@ -1,6 +1,7 @@
 import { VirtualFile } from "../../filesystem/virtual-file";
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
 import { VirtualNode } from "../../filesystem/virtual-node";
+import { VirtualContentBuffer } from '../../filesystem/virtual-content-buffer';
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { PathUtils } from "../../utils/path-utils";
 import { ImmichFileSystem } from "../immich-file-system";
@@ -46,17 +47,16 @@ export class ImmichAlbumMetadataFile extends VirtualFile
         const metadata = buildAlbumMetadataYamlForAlbum(this.album, this.file_system.getCurrentUser(), this.file_system.getUrl());
         return VirtualMetadata.file_rw(this.name, Buffer.byteLength(metadata, 'utf8'), getAlbumMtime(this.album));
     }
-    async event_readfile(): Promise<tmp.FileResult>
+    async event_readfile(): Promise<VirtualContentBuffer>
     {
         await this.file_system.getApi().FETCH_AssetsForAlbum(this.album);
-        return FileUtils.createTmpFile(buildAlbumMetadataYamlForAlbum(this.album, this.file_system.getCurrentUser(), this.file_system.getUrl()));
+        return FileUtils.tmpFromString(buildAlbumMetadataYamlForAlbum(this.album, this.file_system.getCurrentUser(), this.file_system.getUrl()));
     }
-    async event_writefile(contents: tmp.FileResult): Promise<boolean>
+    async event_writefile(contents: VirtualContentBuffer): Promise<boolean>
     {
         const album = this.album
+        const content = contents.contents()
         await this.file_system.getApi().FETCH_AssetsForAlbum(album);
-        const content = fs.readFileSync(contents.name, 'utf8');
-        contents.removeCallback();
         await saveAlbumMetadataFileContent({
             album,
             content,

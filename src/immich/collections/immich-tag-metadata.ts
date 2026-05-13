@@ -1,6 +1,7 @@
 import tmp from 'tmp';
 import { VirtualFile } from "../../filesystem/virtual-file";
 import { VirtualNode } from "../../filesystem/virtual-node";
+import { VirtualContentBuffer } from '../../filesystem/virtual-content-buffer';
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { ImmichFileSystem } from "../immich-file-system";
 import { FileUtils } from "../../utils/file-utils";
@@ -41,11 +42,11 @@ export class ImmichTagMetadataFile extends VirtualFile
         const metadata = buildTagMetadataYamlForTag(this.tag, this.file_system.getCurrentUser(), this.file_system.getUrl());
         return VirtualMetadata.file_ro(this.name, Buffer.byteLength(metadata, 'utf8'), getTagMtime(this.tag))
     }
-    async event_readfile(): Promise<tmp.FileResult>
+    async event_readfile(): Promise<VirtualContentBuffer>
     {
-        return FileUtils.createTmpFile(buildTagMetadataYamlForTag(this.tag, this.file_system.getCurrentUser(), this.file_system.getUrl()));
+        return FileUtils.tmpFromString(buildTagMetadataYamlForTag(this.tag, this.file_system.getCurrentUser(), this.file_system.getUrl()));
     }
-    async event_writefile(contents: tmp.FileResult): Promise<boolean>
+    async event_writefile(contents: VirtualContentBuffer): Promise<boolean>
     {
         //Writing not possible yet
         return false;
