@@ -1,7 +1,6 @@
-import { FileResult } from "tmp";
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
 import { VirtualNode } from "../../filesystem/virtual-node";
-import { VirtualContentBuffer } from '../../filesystem/virtual-content-buffer';
+import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { ImmichFileSystem } from "../immich-file-system";
 import { ImmichAlbumsDirectory } from "./immich-albums-directory";

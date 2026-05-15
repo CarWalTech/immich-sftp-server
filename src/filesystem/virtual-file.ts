@@ -1,7 +1,7 @@
 import tmp from "tmp";
-import { FileUtils } from "../utils/file-utils";
+import { VirtualContentBufferUtils } from "./virtual-content-buffer";
 import { VirtualNode } from "./virtual-node";
-import { VirtualContentBuffer } from './virtual-content-buffer';
+import { VirtualContentBuffer } from "./virtual-content-buffer";
 import { VirtualMetadata } from './virtual-metadata';
 import { logger } from "../logger";
 
@@ -34,7 +34,7 @@ export class VirtualFile extends VirtualNode
     async event_readfile(): Promise<VirtualContentBuffer>
     {
         const content = await this.get_content();
-        return FileUtils.tmpFromString(content)
+        return VirtualContentBufferUtils.bufferFromString(content)
     }
     async event_delete()
     {

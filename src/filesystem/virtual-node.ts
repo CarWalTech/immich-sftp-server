@@ -1,6 +1,6 @@
 // prettier-ignore
 import { VirtualMetadata } from './virtual-metadata';
-import { VirtualContentBuffer } from './virtual-content-buffer';
+import { VirtualContentBuffer } from "./virtual-content-buffer";
 
 export abstract class VirtualNode
 {

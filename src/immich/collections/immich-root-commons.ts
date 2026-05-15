@@ -1,7 +1,7 @@
 
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
 import { VirtualNode } from "../../filesystem/virtual-node";
-import { VirtualContentBuffer } from '../../filesystem/virtual-content-buffer';
+import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { PathUtils } from "../../utils/path-utils";
 import { ImmichFileSystem } from "../immich-file-system";
@@ -14,7 +14,6 @@ import { ImmichAsset } from "../utils/immich-asset-utils";
 import { ImmichAlbumFolder } from "./immich-album-folder";
 import { canRecieveFileFrom, canSendFileTo } from "../utils/immich-fs-utils";
 import { ImmichVirtualDirectory } from "./immich-virtual-directory";
-import { FileResult } from "tmp";
 
 export class ImmichRootUnsortedDirectory extends ImmichVirtualDirectory
 {

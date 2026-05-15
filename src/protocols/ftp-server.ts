@@ -8,7 +8,7 @@ import { ImmichFileSystem } from '../immich/immich-file-system';
 import { VirtualFileSystem } from '../filesystem/virtual-file-system';
 import { TransferProtocolServer } from './transfer-protocol-server';
 import { logger } from '../logger';
-import { VirtualContentBuffer } from '../filesystem/virtual-content-buffer';
+import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
 
 interface FtpStat
 {

@@ -1,13 +1,13 @@
-import fs from 'fs';
-import { ReadStreamOptions } from 'ssh2';
-import tmp from 'tmp';
+import fs from "fs";
+import { ReadStreamOptions } from "ssh2";
+import tmp from "tmp";
 
 
 export class VirtualContentBuffer
 {
     tmp?: tmp.FileResult;
     buffer?: Buffer;
-    checksum?: string;      // pre-computed SHA-1 base64; set by SFTP write path to skip re-hash on upload
+    checksum?: string; // pre-computed SHA-1 base64; set by SFTP write path to skip re-hash on upload
 
     constructor(tmp?: tmp.FileResult, buffer?: Buffer)
     {
@@ -54,7 +54,7 @@ export class VirtualContentBuffer
         if (this.tmp)
         {
             const fd = this.tmp.fd;
-            const out = Buffer.allocUnsafe(length);  // readSync overwrites every byte; zeroing is wasteful
+            const out = Buffer.allocUnsafe(length); // readSync overwrites every byte; zeroing is wasteful
             const bytes = fs.readSync(fd, out, 0, length, offset);
             return out.subarray(0, bytes);
         }
@@ -137,3 +137,40 @@ export class VirtualContentBuffer
         throw new Error("VirtualNodeBuffer: no data backing");
     }
 }
+export class VirtualContentBufferUtils
+{
+
+    /** Create a tmp-backed node containing a UTF-8 string */
+    static bufferFromString(content: string): VirtualContentBuffer
+    {
+        return new VirtualContentBuffer(undefined, Buffer.from(content, 'utf8'));
+    }
+
+    /** Create a tmp-backed node containing raw binary data */
+    static bufferFromBuffer(buf: Buffer): VirtualContentBuffer
+    {
+        return new VirtualContentBuffer(undefined, Buffer.from(buf));
+    }
+
+    /** Create a node backed by an in-memory buffer */
+    static buffer(buf: Buffer): VirtualContentBuffer
+    {
+        return new VirtualContentBuffer(undefined, buf);
+    }
+
+    /** Create an empty tmp-backed node */
+    static emptyBuffer()
+    {
+        return new VirtualContentBuffer(undefined, Buffer.alloc(0));
+    }
+
+    /** Create a tmp-backed node from a readable stream */
+    static async bufferFromStream(stream: NodeJS.ReadableStream): Promise<VirtualContentBuffer>
+    {
+        const chunks: Buffer[] = [];
+        for await (const chunk of stream) chunks.push(chunk as Buffer);
+        return new VirtualContentBuffer(undefined, Buffer.concat(chunks));
+    }
+
+}
+

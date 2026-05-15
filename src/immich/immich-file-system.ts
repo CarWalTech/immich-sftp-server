@@ -9,8 +9,12 @@ import { ImmichRootDirectory } from "./collections/immich-root-directory";
 import { ImmichWritableMemory } from "./immich-writable-memory";
 import { VirtualFsUtils } from "../utils/virtual-fs-utils";
 import { logger } from "../logger";
-import { VirtualContentBuffer } from '../filesystem/virtual-content-buffer';
-
+import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
+import { ImmichSessionCache } from "./immich-session-cache";
+import { PathUtils } from "../utils/path-utils";
+import { VirtualNode } from "../filesystem/virtual-node";
+import { ImmichVirtualAssetFile } from "./collections/immich-virtual-asset-file";
+import { dirname } from "path";
 
 
 export class ImmichFileSystem implements VirtualFileSystem
@@ -38,7 +42,6 @@ export class ImmichFileSystem implements VirtualFileSystem
         await this.immichApi.logout();
         await this.root.event_logout();
     }
-
     async setAttributes(filename: string, mtime: number)
     {
         const { parent, node, name } = await VirtualFsUtils.resolvePath(this.root, filename);
@@ -48,7 +51,6 @@ export class ImmichFileSystem implements VirtualFileSystem
             //await node.event_setattr({ mtime: mtime })
         }
     }
-
     async listFiles(currentDir: string)
     {
         const { node } = await VirtualFsUtils.resolvePath(this.root, currentDir);
@@ -58,7 +60,6 @@ export class ImmichFileSystem implements VirtualFileSystem
         if (result) return result
         else throw new Error("Unable to process event list")
     }
-
     async readFile(filename: string)
     {
         const tmp_result = await this.memory.read(filename)
@@ -70,7 +71,6 @@ export class ImmichFileSystem implements VirtualFileSystem
         const file = (node as VirtualFile);
         return await file.event_readfile();
     }
-
     async writeFile(filename: string, tmpFile: VirtualContentBuffer)
     {
         const is_tmp = await this.memory.write(filename, tmpFile)
@@ -78,16 +78,28 @@ export class ImmichFileSystem implements VirtualFileSystem
 
         const { parent, node, name } = await VirtualFsUtils.resolvePath(this.root, filename);
 
-        if (node && !node.isDir()) await (node as VirtualFile).event_writefile(tmpFile);
-        else if (parent && parent.isDir())
+        if (node && !node.isDir())
+        {
+            await (node as VirtualFile).event_writefile(tmpFile);
+
+            this.getCache().invalidateAssetNode(node);
+            this.getCache().invalidateFilePath(filename);
+            return;
+        }
+
+        if (parent && parent.isDir())
         {
             await parent.event_createfile(name, tmpFile);
-            // Trigger upload immediately rather than waiting for a stat() call
-            await this.memory.flushQueued(filename);
-        }
-        else throw new Error("Cannot write to destination");
-    }
 
+            this.getCache().invalidateDirectoryPath(parent.fullpath);
+            this.getCache().invalidateFilePath(filename);
+
+            await this.memory.flushQueued(filename);
+            return;
+        }
+
+        throw new Error("Cannot write to destination");
+    }
     async stat(filename: string)
     {
         const tmp_result = await this.memory.stat(filename)
@@ -97,7 +109,6 @@ export class ImmichFileSystem implements VirtualFileSystem
         if (!node) throw new Error('File not found');
         return await node.event_stat();
     }
-
     async rename(oldFileName: string, newFileName: string)
     {
         const tmp_result = await this.memory.rename(oldFileName, newFileName)
@@ -117,38 +128,63 @@ export class ImmichFileSystem implements VirtualFileSystem
         }
 
         if (!oldRes.node)
+        {
             throw new Error('File not found');
+        }
         else if (oldRes.name == newRes.name && oldRes.parent.fullpath != newRes.parent.fullpath)
+        {
+            this.getCache().invalidateAssetNode(oldRes.node);
+            this.getCache().invalidateFilePath(oldFileName);
+            this.getCache().invalidateFilePath(newFileName);
+            this.getCache().invalidateAllDirectories();
             return await oldRes.parent.event_movenode(oldRes.node, newRes.parent)
+        }
         else
+        {
+            this.getCache().invalidateAssetNode(oldRes.node);
+            this.getCache().invalidateFilePath(oldFileName);
+            this.getCache().invalidateFilePath(newFileName);
+            this.getCache().invalidateAllDirectories();
             return await oldRes.node.event_rename(newRes.name)
-    }
+        }
 
+    }
     async remove(filename: string)
     {
         const { parent, name, node } = await VirtualFsUtils.resolvePath(this.root, filename);
-        if (!node) return await this.memory.remove(filename);
-        else return await node.event_delete()
-    }
 
+        if (!node)
+        {
+            return await this.memory.remove(filename);
+        }
+
+        this.getCache().invalidateAssetNode(node);
+        this.getCache().invalidateFilePath(filename);
+        this.getCache().invalidateDirectoryPath(parent?.fullpath ?? "/");
+
+        return await node.event_delete();
+    }
     async mkdir(path: string)
     {
         const { parent, node, name } = await VirtualFsUtils.resolvePath(this.root, path);
-        if (node)
-        {
-            logger.error("ImmichFileSystem", "MkDir", "Destination already exists")
-            return false;
-        }
-        if (!parent)
-        {
-            logger.error("ImmichFileSystem", "MkDir", "Parent for destination does not exist")
-            return false;
-        }
-        return await parent.event_mkdir(name)
+
+        if (node) return false;
+        if (!parent) return false;
+
+        const result = await parent.event_mkdir(name);
+
+        this.getCache().invalidateDirectoryPath(parent.fullpath);
+        this.getCache().invalidateDirectoryPath(path);
+
+        return result;
     }
 
 
     // Get Methods
+    public getCache(): ImmichSessionCache
+    {
+        return this.getApi().cache;
+    }
     public getApi()
     {
         return this.immichApi;
@@ -173,6 +209,10 @@ export class ImmichFileSystem implements VirtualFileSystem
     {
         return await VirtualFsUtils.resolvePath(this.root, path);
     }
+
+
+
+
 }
 
 
