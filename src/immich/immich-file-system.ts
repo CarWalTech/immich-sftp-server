@@ -106,7 +106,7 @@ export class ImmichFileSystem implements VirtualFileSystem
         if (tmp_result) return tmp_result;
 
         const { node } = await VirtualFsUtils.resolvePath(this.root, filename);
-        if (!node) throw new Error('File not found');
+        if (!node) throw new Error(`File not found: ${filename}`);
         return await node.event_stat();
     }
     async rename(oldFileName: string, newFileName: string)

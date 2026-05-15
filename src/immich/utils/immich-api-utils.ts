@@ -4,7 +4,7 @@ import { ImmichAlbumFolder } from "../collections/immich-album-folder";
 import { ImmichVirtualDirectory } from "../collections/immich-virtual-directory";
 import { ImmichVirtualAssetFile } from "../collections/immich-virtual-asset-file";
 import { ImmichAPI } from "../immich-api";
-import { ImmichAsset } from "./immich-asset-utils";
+import { ImmichAsset, ImmichAssetUtils } from "./immich-asset-utils";
 import { logger } from "../../logger";
 import { ImmichTagFolder } from "../collections/immich-tag-folder";
 
@@ -155,7 +155,7 @@ export async function collectAlbumAssets(album_folder: ImmichAlbumFolder, reserv
     for (let i = 0; i < assets.length; i++)
     {
         const asset = assets[i];
-        const finalName = buildUniqueName(asset.originalFileName, reserved_names, nameCount);
+        const finalName = buildUniqueName(ImmichAssetUtils.buildPreferredAssetName(asset), reserved_names, nameCount);
 
         files[i] = new ImmichVirtualAssetFile(
             asset,
@@ -187,7 +187,7 @@ export async function collectUnsortedAssets(source_folder: ImmichVirtualDirector
     for (let i = 0; i < assets.length; i++)
     {
         const asset = assets[i];
-        const finalName = buildUniqueName(asset.originalFileName, reserved_names, nameCount);
+        const finalName = buildUniqueName(ImmichAssetUtils.buildPreferredAssetName(asset), reserved_names, nameCount);
 
         files[i] = new ImmichVirtualAssetFile(
             asset,
@@ -219,7 +219,7 @@ export async function collectTrashedAssets(source_folder: ImmichVirtualDirectory
     for (let i = 0; i < assets.length; i++)
     {
         const asset = assets[i];
-        const finalName = buildUniqueName(asset.originalFileName, reserved_names, nameCount);
+        const finalName = buildUniqueName(ImmichAssetUtils.buildPreferredAssetName(asset), reserved_names, nameCount);
 
         files[i] = new ImmichVirtualAssetFile(
             asset,
@@ -256,7 +256,7 @@ export async function collectTaggedAssets(source: ImmichTagFolder, reserved_name
     for (let i = 0; i < assets.length; i++)
     {
         const asset = assets[i];
-        const finalName = buildUniqueName(asset.originalFileName, reserved_names, nameCount);
+        const finalName = buildUniqueName(ImmichAssetUtils.buildPreferredAssetName(asset), reserved_names, nameCount);
 
         files[i] = new ImmichVirtualAssetFile(
             asset,
