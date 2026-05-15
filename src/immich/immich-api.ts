@@ -201,10 +201,10 @@ export class ImmichAPI
             });
 
 
-            if (skipResponseLog == true)
-                logger.info(`ImmichAPI`, `${logAction}`, `Received (${logAction}):`, response.status, '[Data skipped]');
-            else
-                logger.info(`ImmichAPI`, `${logAction}`, `Received:`, response.status, this.filterLogData(response.data));
+            //if (skipResponseLog == true)
+            logger.info(`ImmichAPI`, `${logAction}`, `Received (${logAction}):`, response.status, '[Data skipped]');
+            //else
+            //logger.info(`ImmichAPI`, `${logAction}`, `Received:`, response.status, this.filterLogData(response.data));
             return response.data;
         }
         catch (restoreError)
@@ -305,9 +305,9 @@ export class ImmichAPI
     // #endregion
 
     // #region Fetch Methods
-    public async FETCH_Albums(assetId?: string): Promise<ImmichAlbumDirectoryInfo[]>
+    public async FETCH_Albums(): Promise<ImmichAlbumDirectoryInfo[]>
     {
-        const cacheKey = assetId ? `albums_for_${assetId}` : `albums_all`;
+        const cacheKey = `albums_all`;
 
         return await this.cache.cachedFetch({
             cacheMap: this.cache.albums,
@@ -316,7 +316,7 @@ export class ImmichAPI
             {
                 const response = await this.callApi({
                     method: 'GET',
-                    endpoint: assetId ? `albums?assetId=${assetId}` : 'albums',
+                    endpoint: 'albums',
                     logAction: '',
                     skipResponseLog: true,
                 });
@@ -326,26 +326,19 @@ export class ImmichAPI
             },
             fetchData: async () =>
             {
-                const [ownAlbumsResponse, sharedAlbumsResponse] = await Promise.all([
+                const [ownAlbumsResponse] = await Promise.all([
                     this.callApi({
                         method: 'GET',
-                        endpoint: assetId ? `albums?assetId=${assetId}` : 'albums',
+                        endpoint: 'albums',
                         logAction: 'All own albums',
                         skipResponseLog: true,
-                    }),
-                    this.callApi({
-                        method: 'GET',
-                        endpoint: assetId ? `albums?shared=true&assetId=${assetId}` : 'albums?shared=true',
-                        logAction: 'All shared albums',
-                        skipResponseLog: true,
-                    }),
+                    })
                 ]);
 
                 const ownAlbums = Array.isArray(ownAlbumsResponse) ? ownAlbumsResponse : [];
-                const sharedAlbums = Array.isArray(sharedAlbumsResponse) ? sharedAlbumsResponse : [];
                 const combinedByAlbumId = new Map<string, Record<string, unknown>>();
 
-                for (const album of [...ownAlbums, ...sharedAlbums])
+                for (const album of [...ownAlbums])
                 {
                     if (isObjectWithId(album))
                     {
@@ -841,7 +834,7 @@ export class ImmichAPI
     }
     async SERVER_AddAssetToUnsorted(assetId: any)
     {
-        const albums = await this.FETCH_Albums(assetId)
+        const albums = await this.FETCH_AlbumsForAssetId(assetId)
         for (var i = 0; i < albums.length; i++)
         {
             await this.SERVER_DeleteAssetFromAlbumOnly(albums[i], assetId)
