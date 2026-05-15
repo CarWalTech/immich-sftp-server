@@ -1,5 +1,5 @@
 import fs from 'fs';
-import { Attributes, AuthContext, Connection, Server, ServerConfig, SFTPWrapper } from 'ssh2';
+import { Attributes, AuthContext, Connection, Server, ServerConfig, ServerConnectionListener, SFTPWrapper } from 'ssh2';
 import path, { basename } from 'path';
 import crypto from 'crypto';
 import tmp from 'tmp';
@@ -9,7 +9,9 @@ import { config } from '../config';
 import { TransferProtocolServer } from './transfer-protocol-server';
 import { VirtualMetadata } from '../filesystem/virtual-metadata';
 import { logger } from '../logger';
-import { VirtualContentBuffer } from '../filesystem/virtual-content-buffer';
+import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
+import { ImmichAPI } from '../immich/immich-api';
+import { ImmichSessionCache } from '../immich/immich-session-cache';
 
 // #region TCP Receivers
 
@@ -270,7 +272,7 @@ async function SFTP_OPEN(self: SftpConnectionInstance, reqid: number, filename: 
         entry.readSize = entry.readNode!.size;   // cache once; avoids per-READ statSync
       })();
       // Suppress unhandled-rejection warning in the window before the first READ
-      void entry.readInitPromise.catch(() => {});
+      void entry.readInitPromise.catch(() => { });
     }
 
     self.handleMap[key] = entry;
@@ -921,6 +923,14 @@ export class SftpProtocolServer implements TransferProtocolServer
   }
 }
 
+export class ImmichSftpServer extends Server
+{
+  constructor(cfg: ServerConfig, listener?: ServerConnectionListener)
+  {
+    super(cfg, listener)
+  }
+}
+
 // #endregion
 
 // #region Constants
@@ -944,7 +954,7 @@ export const OPEN_MODE = {
 
 // #endregion
 
-const server = new Server(createServerConfig(), (con: SftpConnection) =>
+const server = new ImmichSftpServer(createServerConfig(), (con: SftpConnection) =>
 {
   logger.info('SFTP', 'SERVER', 'Client connected');
   con.on('error', async (err) => { await TCP_Error(con, err) });

@@ -18,5 +18,6 @@
             "onAutoForward": "notify",
             "label": "SFTP",
         },
-    }
+    },
+    "DockerRun.DisableAutoGenerateConfig": true
 }

@@ -106,189 +106,172 @@ export function isCurrentUserAlbumOwner(album: ImmichAlbumBase, currentUser: Imm
 }
 
 // Collectors
+function buildUniqueName(base: string, reserved: Set<string>, nameCount: Map<string, number>): string
+{
+    // Reserved → force collision immediately
+    if (reserved.has(base))
+    {
+        const count = nameCount.get(base) ?? 0;
+        nameCount.set(base, count + 1);
+        return `${base} (${count + 1})`;
+    }
+
+    // Normal collision logic
+    let finalName = base;
+    let count = nameCount.get(finalName) ?? 0;
+
+    if (count > 0)
+    {
+        do
+        {
+            count++;
+            finalName = `${base} (${count})`;
+        } while (reserved.has(finalName));
+    }
+
+    nameCount.set(base, count + 1);
+    return finalName;
+}
+
 export async function collectAlbumAssets(album_folder: ImmichAlbumFolder, reserved_names: Set<string>): Promise<ImmichVirtualAssetFile[]>
 {
-    const node_data = album_folder.get_album_data()
+    const node_data = album_folder.get_album_data();
     if (!node_data.album) return [];
 
     const album = node_data.album;
+    const albumId = album.id;
+
+    // 1. Check cache
+    const cached = album_folder.file_system.getCache().albumAssetListings.get(albumId);
+    if (cached) return cached;
+
+    // 2. Ensure album assets are loaded (cachedFetch handles this)
     await album_folder.file_system.getApi().FETCH_AssetsForAlbum(album);
 
     const assets = album.assets ?? [];
     const files = new Array<ImmichVirtualAssetFile>(assets.length);
-
-    // Track collisions for asset filenames
     const nameCount = new Map<string, number>();
 
     for (let i = 0; i < assets.length; i++)
     {
         const asset = assets[i];
+        const finalName = buildUniqueName(asset.originalFileName, reserved_names, nameCount);
 
-        let base = asset.originalFileName;
-
-        // If the base name is reserved, force collision logic immediately
-        if (reserved_names.has(base))
-        {
-            const count = nameCount.get(base) ?? 0;
-            nameCount.set(base, count + 1);
-            base = `${base} (${count + 1})`;
-        }
-
-        // Now ensure uniqueness among assets
-        let finalName = base;
-        let count = nameCount.get(finalName) ?? 0;
-
-        if (count > 0)
-        {
-            // Already used — increment until unique
-            do
-            {
-                count++;
-                finalName = `${base} (${count})`;
-            } while (reserved_names.has(finalName));
-        }
-
-        nameCount.set(base, count + 1);
-
-        files[i] = new ImmichVirtualAssetFile(asset, finalName, album_folder, album_folder.file_system);
+        files[i] = new ImmichVirtualAssetFile(
+            asset,
+            finalName,
+            album_folder,
+            album_folder.file_system
+        );
     }
+
+    // 3. Store in cache
+    album_folder.file_system.getCache().albumAssetListings.set(albumId, files);
 
     return files;
 }
 export async function collectUnsortedAssets(source_folder: ImmichVirtualDirectory, reserved_names: Set<string>): Promise<ImmichVirtualAssetFile[]>
 {
-    const assets = await source_folder.file_system.getApi().FETCH_AssetsForNonAlbums();
-    const files = new Array<ImmichVirtualAssetFile>(assets.length);
+    const cacheKey = "__unsorted_assets__";
 
-    // Track collisions for asset filenames
+    // 1. Check cache
+    const cached = source_folder.file_system.getCache().albumAssetListings.get(cacheKey);
+    if (cached) return cached;
+
+    // 2. Fetch (cachedFetch handles metadata)
+    const assets = await source_folder.file_system.getApi().FETCH_AssetsForNonAlbums();
+
+    const files = new Array<ImmichVirtualAssetFile>(assets.length);
     const nameCount = new Map<string, number>();
 
     for (let i = 0; i < assets.length; i++)
     {
         const asset = assets[i];
+        const finalName = buildUniqueName(asset.originalFileName, reserved_names, nameCount);
 
-        let base = asset.originalFileName;
-
-        // If the base name is reserved, force collision logic immediately
-        if (reserved_names.has(base))
-        {
-            const count = nameCount.get(base) ?? 0;
-            nameCount.set(base, count + 1);
-            base = `${base} (${count + 1})`;
-        }
-
-        // Now ensure uniqueness among assets
-        let finalName = base;
-        let count = nameCount.get(finalName) ?? 0;
-
-        if (count > 0)
-        {
-            // Already used — increment until unique
-            do
-            {
-                count++;
-                finalName = `${base} (${count})`;
-            } while (reserved_names.has(finalName));
-        }
-
-        nameCount.set(base, count + 1);
-
-        files[i] = new ImmichVirtualAssetFile(asset, finalName, source_folder, source_folder.file_system);
+        files[i] = new ImmichVirtualAssetFile(
+            asset,
+            finalName,
+            source_folder,
+            source_folder.file_system
+        );
     }
+
+    // 3. Store in cache
+    source_folder.file_system.getCache().albumAssetListings.set(cacheKey, files);
 
     return files;
 }
 export async function collectTrashedAssets(source_folder: ImmichVirtualDirectory, reserved_names: Set<string>): Promise<ImmichVirtualAssetFile[]>
 {
-    const assets = await source_folder.file_system.getApi().FETCH_AssetsForTrash();
-    const files = new Array<ImmichVirtualAssetFile>(assets.length);
+    const cacheKey = "__trashed_assets__";
 
-    // Track collisions for asset filenames
+    // 1. Check cache
+    const cached = source_folder.file_system.getCache().albumAssetListings.get(cacheKey);
+    if (cached) return cached;
+
+    // 2. Fetch (cachedFetch handles metadata)
+    const assets = await source_folder.file_system.getApi().FETCH_AssetsForTrash();
+
+    const files = new Array<ImmichVirtualAssetFile>(assets.length);
     const nameCount = new Map<string, number>();
 
     for (let i = 0; i < assets.length; i++)
     {
         const asset = assets[i];
+        const finalName = buildUniqueName(asset.originalFileName, reserved_names, nameCount);
 
-        let base = asset.originalFileName;
-
-        // If the base name is reserved, force collision logic immediately
-        if (reserved_names.has(base))
-        {
-            const count = nameCount.get(base) ?? 0;
-            nameCount.set(base, count + 1);
-            base = `${base} (${count + 1})`;
-        }
-
-        // Now ensure uniqueness among assets
-        let finalName = base;
-        let count = nameCount.get(finalName) ?? 0;
-
-        if (count > 0)
-        {
-            // Already used — increment until unique
-            do
-            {
-                count++;
-                finalName = `${base} (${count})`;
-            } while (reserved_names.has(finalName));
-        }
-
-        nameCount.set(base, count + 1);
-
-        files[i] = new ImmichVirtualAssetFile(asset, finalName, source_folder, source_folder.file_system);
+        files[i] = new ImmichVirtualAssetFile(
+            asset,
+            finalName,
+            source_folder,
+            source_folder.file_system
+        );
     }
+
+    // 3. Store in cache
+    source_folder.file_system.getCache().albumAssetListings.set(cacheKey, files);
 
     return files;
 }
 export async function collectTaggedAssets(source: ImmichTagFolder, reserved_names: Set<string>): Promise<ImmichVirtualAssetFile[]>
 {
+
     if (!source.node_data.tag) return [];
 
     const tag = source.node_data.tag;
+    const cacheKey = `tag_assets_${tag.id}`;
+
+    // 1. Check cache
+    const cached = source.file_system.getCache().albumAssetListings.get(cacheKey);
+    if (cached) return cached;
+
+    // 2. Fetch (cachedFetch handles metadata)
     await source.file_system.getApi().FETCH_AssetsForTag(tag);
 
     const assets = tag.assets ?? [];
     const files = new Array<ImmichVirtualAssetFile>(assets.length);
-
-    // Track collisions for asset filenames
     const nameCount = new Map<string, number>();
 
     for (let i = 0; i < assets.length; i++)
     {
         const asset = assets[i];
+        const finalName = buildUniqueName(asset.originalFileName, reserved_names, nameCount);
 
-        let base = asset.originalFileName;
-
-        // If the base name is reserved, force collision logic immediately
-        if (reserved_names.has(base))
-        {
-            const count = nameCount.get(base) ?? 0;
-            nameCount.set(base, count + 1);
-            base = `${base} (${count + 1})`;
-        }
-
-        // Now ensure uniqueness among assets
-        let finalName = base;
-        let count = nameCount.get(finalName) ?? 0;
-
-        if (count > 0)
-        {
-            // Already used — increment until unique
-            do
-            {
-                count++;
-                finalName = `${base} (${count})`;
-            } while (reserved_names.has(finalName));
-        }
-
-        nameCount.set(base, count + 1);
-
-        files[i] = new ImmichVirtualAssetFile(asset, finalName, source, source.file_system);
+        files[i] = new ImmichVirtualAssetFile(
+            asset,
+            finalName,
+            source,
+            source.file_system
+        );
     }
+
+    // 3. Store in cache
+    source.file_system.getCache().albumAssetListings.set(cacheKey, files);
 
     return files;
 }
+
 
 // Getters
 export function getDesecendantAlbums(node: ImmichAlbumsDirectoryNode, out: ImmichAlbumDirectoryInfo[]): void

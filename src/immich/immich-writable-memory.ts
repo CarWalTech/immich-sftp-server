@@ -6,7 +6,7 @@ import { ImmichUploadQueueItem } from "./immich-api";
 import { ImmichAlbumDirectoryInfo } from './utils/immich-api-utils';
 import path from "path";
 import { logger } from '../logger';
-import { VirtualContentBuffer } from '../filesystem/virtual-content-buffer';
+import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
 
 
 

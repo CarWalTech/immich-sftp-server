@@ -1,6 +1,6 @@
 import tmp from 'tmp';
 import { VirtualMetadata } from './virtual-metadata';
-import { VirtualContentBuffer } from './virtual-content-buffer';
+import { VirtualContentBuffer } from "./virtual-content-buffer";
 
 
 export interface VirtualFileBuffer

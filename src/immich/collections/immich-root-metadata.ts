@@ -1,7 +1,7 @@
 import { VirtualFile } from "../../filesystem/virtual-file";
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
 import { VirtualNode } from "../../filesystem/virtual-node";
-import { VirtualContentBuffer } from '../../filesystem/virtual-content-buffer';
+import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { PathUtils } from "../../utils/path-utils";
 import { ImmichFileSystem } from "../immich-file-system";
@@ -10,7 +10,7 @@ import { ImmichRootDirectory } from "./immich-root-directory";
 import { ImmichAssetUtils } from "../utils/immich-asset-utils";
 import { ALBUM_BROWSER_LINK_FILE_NAME, ALBUM_METADATA_FILE_NAME } from "../utils/immich-metadata-utils";
 import tmp from 'tmp';
-import { FileUtils } from "../../utils/file-utils";
+import { VirtualContentBufferUtils } from "../../filesystem/virtual-content-buffer";
 import { saveAlbumMetadataFileContent, buildAlbumBrowserLinkForAlbum, buildAlbumMetadataYamlForAlbum } from "../utils/immich-metadata-utils";
 import { ImmichAlbumFolder } from "./immich-album-folder";
 import { ImmichAlbumDirectoryInfo } from '../utils/immich-api-utils';
@@ -49,7 +49,7 @@ export class ImmichRootMetadataFile extends VirtualFile
     async event_readfile(): Promise<VirtualContentBuffer>
     {
         const metadata = UserScopedConfig.load_user_yaml(this.file_system.getCurrentUser()?.id)
-        return FileUtils.tmpFromString(metadata);
+        return VirtualContentBufferUtils.bufferFromString(metadata);
     }
     async event_writefile(contents: VirtualContentBuffer): Promise<boolean>
     {

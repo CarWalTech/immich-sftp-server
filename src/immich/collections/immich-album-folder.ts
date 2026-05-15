@@ -1,13 +1,12 @@
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
 import { VirtualNode } from "../../filesystem/virtual-node";
-import { VirtualContentBuffer } from '../../filesystem/virtual-content-buffer';
+import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { ImmichFileSystem } from "../immich-file-system";
 import { ALBUM_BROWSER_LINK_FILE_NAME, ALBUM_METADATA_FILE_NAME } from "../utils/immich-metadata-utils";
 import { ImmichVirtualAssetFile } from "./immich-virtual-asset-file";
 import { ImmichAlbumsDirectory } from "./immich-albums-directory";
 import { ImmichAlbumLinkFile } from "./immich-album-link";
-import { FileResult } from "tmp";
 import { ImmichRootUnsortedDirectory } from "./immich-root-commons";
 import { config } from "../../config";
 import { getDesecendantAlbums, collectAlbumAssets, ImmichAlbumsDirectoryNode } from "../utils/immich-api-utils";
@@ -50,42 +49,54 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
     }
     public get_album_path(): string[]
     {
-        if ((this.parent as ImmichAlbumsDirectory) !== undefined)
+        if (this.parent instanceof ImmichAlbumsDirectory)
         {
-            return [this.get_album_realname()]
+            return [this.get_album_realname()];
         }
-        else if ((this.parent as ImmichAlbumFolder) !== undefined)
-        {
-            return [...(this.parent as ImmichAlbumFolder).get_album_path(), this.get_album_realname()]
-        }
-        else throw Error("Can't figure out album path because the folder parents seem to be invalid")
-    }
 
+        if (this.parent instanceof ImmichAlbumFolder)
+        {
+            return [...this.parent.get_album_path(), this.get_album_realname()];
+        }
+
+        throw new Error("Invalid album folder parent");
+
+    }
     async event_rename(new_name: string): Promise<boolean>
     {
-        // 1. Compute old prefix
+        const separator = ImmichAlbumFolder.SEPERATOR;
+
+        // 1. Compute the old path segments for THIS album
         const oldSegments = this.get_album_path();
-        const oldPrefix = oldSegments.join(ImmichAlbumFolder.SEPERATOR);
-
-        // 2. Compute new prefix
         const newSegments = [...oldSegments];
-        newSegments.pop();
-        newSegments.push(new_name);
-        const newPrefix = newSegments.join(ImmichAlbumFolder.SEPERATOR);
+        newSegments[newSegments.length - 1] = new_name;
 
-        // 3. Collect all descendant albums
+        // 2. Compute the new full name for THIS album
+        const newFullName = newSegments.join(separator);
+
+        // 3. Collect all descendant albums (including this one)
         const affected: ImmichAlbumDirectoryInfo[] = [];
         getDesecendantAlbums(this.node_data, affected);
 
-        // 4. Rename each album
+        // 4. Rename each album based on segment replacement
         for (const album of affected)
         {
-            const suffix = album.albumName.slice(oldPrefix.length);
-            const newFullName = newPrefix + suffix;
+            // Get the descendant's current path segments
+            const descendantSegments = album.albumName.split(separator);
 
-            await this.file_system.getApi().SERVER_RenameAlbum(album, newFullName);
+            // Replace the prefix (oldSegments) with the new prefix (newSegments)
+            const updatedSegments = [
+                ...newSegments,
+                ...descendantSegments.slice(oldSegments.length)
+            ];
+
+            const updatedFullName = updatedSegments.join(separator);
+
+            await this.file_system.getApi().SERVER_RenameAlbum(album, updatedFullName);
         }
-        this.refresh()
+
+        // 5. Refresh this folder
+        this.refresh();
         return true;
     }
     async event_createfile(filename: string, contents: VirtualContentBuffer): Promise<boolean>
@@ -99,6 +110,7 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
         }
 
         await this.file_system.memory.push(filename, this.fullpath, contents, album)
+        this.file_system.getCache().invalidateDirectoryPath(this.fullpath);
         return true;
     }
     async event_stat(): Promise<VirtualMetadata>
@@ -138,10 +150,12 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
             var reserved_names = Array.from(sub_folders.keys()).concat(Array.from(metadata_files.keys()))
             var assets = await collectAlbumAssets(this, new Set(reserved_names));
             var asset_files = new Map(assets.map(asset => ([asset.name, asset as VirtualNode])))
+            this.file_system.getCache().invalidateDirectoryPath(this.fullpath);
             return new Map([...Array.from(sub_folders.entries()), ...Array.from(metadata_files.entries()), ...Array.from(asset_files.entries())]);
         }
         else
         {
+            this.file_system.getCache().invalidateDirectoryPath(this.fullpath);
             return sub_folders
         }
     }
@@ -152,6 +166,7 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
             const asset = (item as ImmichVirtualAssetFile)
             const album = (this.node_data.album as ImmichAlbumDirectoryInfo)
             await this.file_system.getApi().SERVER_DeleteAssetFromAlbumOnly(album, asset.asset_id)
+            this.file_system.getCache().invalidateDirectoryPath(this.fullpath);
             return true
         }
         else
@@ -166,12 +181,18 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
             const asset = (item as ImmichVirtualAssetFile)
             const album = (this.node_data.album as ImmichAlbumDirectoryInfo)
             await this.file_system.getApi().SERVER_AddAssetToAlbum(album, asset.asset_id)
+            this.file_system.getCache().invalidateDirectoryPath(this.fullpath);
             return true
         }
         else
         {
             return false;
         }
+    }
+    refresh()
+    {
+        this.file_system.getCache().invalidateDirectoryPath(this.fullpath);
+        super.refresh()
     }
 }
 

@@ -13,7 +13,7 @@ import { VirtualFileSystem } from '../filesystem/virtual-file-system';
 import { TransferProtocolServer } from './transfer-protocol-server';
 import { logger } from '../logger';
 import path from 'path';
-import { VirtualContentBuffer } from '../filesystem/virtual-content-buffer';
+import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
 
 // ──────────────────────────────────────────────────────────────
 // Shared path normalization (identical to SFTP)

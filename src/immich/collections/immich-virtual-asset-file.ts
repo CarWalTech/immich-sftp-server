@@ -1,14 +1,13 @@
 import { VirtualFile } from "../../filesystem/virtual-file";
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
 import { VirtualNode } from "../../filesystem/virtual-node";
-import { VirtualContentBuffer } from '../../filesystem/virtual-content-buffer';
+import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { PathUtils } from "../../utils/path-utils";
 import { ImmichFileSystem } from "../immich-file-system";
 import { ImmichAlbumBase } from "../utils/immich-api-utils";
 import { ImmichAssetUtils } from "../utils/immich-asset-utils";
 import { ALBUM_BROWSER_LINK_FILE_NAME, ALBUM_METADATA_FILE_NAME } from "../utils/immich-metadata-utils";
-import { FileResult } from "tmp";
 import { ImmichAsset } from "../utils/immich-asset-utils";
 import { deleteAssetFromContainer } from "../utils/immich-fs-utils";
 
