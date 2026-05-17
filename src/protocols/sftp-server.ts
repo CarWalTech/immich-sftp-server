@@ -1,5 +1,5 @@
 import fs from 'fs';
-import { Attributes, AuthContext, Connection, Server, ServerConfig, ServerConnectionListener, SFTPWrapper } from 'ssh2';
+import { AcceptConnection, Attributes, AuthContext, Connection, RejectConnection, Server, ServerConfig, ServerConnectionListener, Session, SFTPWrapper } from 'ssh2';
 import path, { basename } from 'path';
 import crypto from 'crypto';
 import tmp from 'tmp';
@@ -10,8 +10,6 @@ import { TransferProtocolServer } from './transfer-protocol-server';
 import { VirtualMetadata } from '../filesystem/virtual-metadata';
 import { logger } from '../logger';
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
-import { ImmichAPI } from '../immich/immich-api';
-import { ImmichSessionCache } from '../immich/immich-session-cache';
 
 // #region TCP Receivers
 
@@ -59,79 +57,62 @@ function TCP_Error(con: SftpConnection, err: Error)
   logger.error('SFTP', 'SOCKET', `Connection error: ${err.message}`);
 }
 
-function TCP_Ready(con: SftpConnection)
+function TCP_Session(con: SftpConnection, accept: AcceptConnection<Session>, reject: RejectConnection)
 {
-
-  logger.info('SFTP', 'SOCKET', 'Client is ready');
-  con.on('session', (accept, reject) =>
+  const session = accept();
+  logger.info('SFTP', 'SOCKET', 'Session started');
+  session.on('sftp', (accept, reject) =>
   {
-    const session = accept();
-    logger.info('SFTP', 'SOCKET', 'Session started');
+    //Accept SFTP session
+    const sftpStream = accept();
+    logger.info('SFTP', 'SOCKET', 'SFTP session started');
 
-
-
-
-    //session.on('signal', (accept, reject, info) => Session_Signal(con, accept, reject, info));
-    //session.on('exec', (accept, reject, info) => Session_Exec(con, accept, reject, info));
-    session.on('sftp', (accept, reject) =>
+    //Find backend or close connection
+    const fsBackend = con.fsBackend;
+    if (!fsBackend)
     {
-      //Accept SFTP session
-      const sftpStream = accept();
-      logger.info('SFTP', 'SOCKET', 'SFTP session started');
+      logger.error('SFTP', 'SOCKET', 'File system backend is not initialized. Closing connection.');
+      return con.end();
+    }
 
-      //Find backend or close connection
-      const fsBackend = con.fsBackend;
-      if (!fsBackend)
-      {
-        logger.error('SFTP', 'SOCKET', 'File system backend is not initialized. Closing connection.');
-        return con.end();
-      }
+    //Handle map
+    const handleMap: Record<string, SftpHandleEntry> = {};
 
-      //Handle map
-      const handleMap: Record<string, SftpHandleEntry> = {};
+    // Connection config
+    const netConfig = con.cfg
+    if (!netConfig)
+    {
+      logger.error('SFTP', 'SOCKET', 'Connection Config is not initialized. Closing connection.');
+      return con.end();
+    }
 
-      // Connection config
-      const netConfig = con.cfg
-      if (!netConfig)
-      {
-        logger.error('SFTP', 'SOCKET', 'Connection Config is not initialized. Closing connection.');
-        return con.end();
-      }
+    const service: SftpConnectionInstance = {
+      fsBackend,
+      handleMap,
+      sftpStream,
+      netConfig
+    }
 
-      const service: SftpConnectionInstance = {
-        fsBackend,
-        handleMap,
-        sftpStream,
-        netConfig
-      }
-
-      sftpStream.on('ready', async () => { await SFTP_Ready(service) });
-      sftpStream.on('OPEN', async (reqid: number, filename: string, flags: number, attrs: Attributes) => { await SFTP_OPEN(service, reqid, filename, flags, attrs) });
-      sftpStream.on('READ', async (reqid: number, handle: Buffer, offset: number, len: number) => { await SFTP_READ(service, reqid, handle, offset, len) });
-      sftpStream.on('WRITE', async (reqid: number, handle: Buffer, offset: number, data: Buffer) => { await SFTP_WRITE(service, reqid, handle, offset, data) });
-      sftpStream.on('FSTAT', async (reqid: number, handle: Buffer) => { await SFTP_FSTAT(service, reqid, handle) });
-      sftpStream.on('FSETSTAT', async (reqid: number, handle: Buffer, attrs: Attributes) => { await SFTP_FSETSTAT(service, reqid, handle, attrs) });
-      sftpStream.on('CLOSE', async (reqid: number, handle: Buffer) => { await SFTP_CLOSE(service, reqid, handle) });
-      sftpStream.on('OPENDIR', async (reqid: number, rawPath) => { await SFTP_OPENDIR(service, reqid, rawPath) });
-      sftpStream.on('READDIR', async (reqid: number, handle) => { await SFTP_READDIR(service, reqid, handle) });
-      sftpStream.on("LSTAT", async (reqid: number, path: string) => { await SFTP_LSTAT(service, reqid, path) });
-      sftpStream.on('STAT', async (reqid: number, filePath) => { await SFTP_STAT(service, reqid, filePath) });
-      sftpStream.on('REMOVE', async (reqid: number, filePath) => { await SFTP_REMOVE(service, reqid, filePath) });
-      sftpStream.on('RMDIR', async (reqid, dirPath) => { await SFTP_RMDIR(service, reqid, dirPath) });
-      sftpStream.on('REALPATH', async (reqid: number, givenPath) => { await SFTP_REALPATH(service, reqid, givenPath) });
-      sftpStream.on('READLINK', async (reqid: number, path: string) => { await SFTP_READLINK(service, reqid, path) });
-      sftpStream.on('SETSTAT', async (reqid: number, filePath, attrs: Attributes) => { await SFTP_SETSTAT(service, reqid, filePath, attrs) });
-      sftpStream.on('MKDIR', async (reqid: number, dirPath, attrs) => { await SFTP_MKDIR(service, reqid, dirPath, attrs) });
-      sftpStream.on('RENAME', async (reqid: number, oldPath, newPath) => { await SFTP_RENAME(service, reqid, oldPath, newPath) });
-      sftpStream.on('SYMLINK', async (reqid: number, targetPath: string, linkPath: string) => { await SFTP_SYMLINK(service, reqid, targetPath, linkPath) });
-      sftpStream.on('EXTENDED', async (reqid: number, extName: string, extData: Buffer) => { await SFTP_EXTENDED(service, reqid, extName, extData) });
-    });
-  });
-
-  con.on('error', (err) =>
-  {
-    logger.error('SFTP', 'SOCKET', `Socket error: ${err.message}`);
-    con.end();
+    sftpStream.on('ready', async () => { await SFTP_Ready(service) });
+    sftpStream.on('OPEN', async (reqid: number, filename: string, flags: number, attrs: Attributes) => { await SFTP_OPEN(service, reqid, filename, flags, attrs) });
+    sftpStream.on('READ', async (reqid: number, handle: Buffer, offset: number, len: number) => { await SFTP_READ(service, reqid, handle, offset, len) });
+    sftpStream.on('WRITE', async (reqid: number, handle: Buffer, offset: number, data: Buffer) => { await SFTP_WRITE(service, reqid, handle, offset, data) });
+    sftpStream.on('FSTAT', async (reqid: number, handle: Buffer) => { await SFTP_FSTAT(service, reqid, handle) });
+    sftpStream.on('FSETSTAT', async (reqid: number, handle: Buffer, attrs: Attributes) => { await SFTP_FSETSTAT(service, reqid, handle, attrs) });
+    sftpStream.on('CLOSE', async (reqid: number, handle: Buffer) => { await SFTP_CLOSE(service, reqid, handle) });
+    sftpStream.on('OPENDIR', async (reqid: number, rawPath) => { await SFTP_OPENDIR(service, reqid, rawPath) });
+    sftpStream.on('READDIR', async (reqid: number, handle) => { await SFTP_READDIR(service, reqid, handle) });
+    sftpStream.on("LSTAT", async (reqid: number, path: string) => { await SFTP_LSTAT(service, reqid, path) });
+    sftpStream.on('STAT', async (reqid: number, filePath) => { await SFTP_STAT(service, reqid, filePath) });
+    sftpStream.on('REMOVE', async (reqid: number, filePath) => { await SFTP_REMOVE(service, reqid, filePath) });
+    sftpStream.on('RMDIR', async (reqid, dirPath) => { await SFTP_RMDIR(service, reqid, dirPath) });
+    sftpStream.on('REALPATH', async (reqid: number, givenPath) => { await SFTP_REALPATH(service, reqid, givenPath) });
+    sftpStream.on('READLINK', async (reqid: number, path: string) => { await SFTP_READLINK(service, reqid, path) });
+    sftpStream.on('SETSTAT', async (reqid: number, filePath, attrs: Attributes) => { await SFTP_SETSTAT(service, reqid, filePath, attrs) });
+    sftpStream.on('MKDIR', async (reqid: number, dirPath, attrs) => { await SFTP_MKDIR(service, reqid, dirPath, attrs) });
+    sftpStream.on('RENAME', async (reqid: number, oldPath, newPath) => { await SFTP_RENAME(service, reqid, oldPath, newPath) });
+    sftpStream.on('SYMLINK', async (reqid: number, targetPath: string, linkPath: string) => { await SFTP_SYMLINK(service, reqid, targetPath, linkPath) });
+    sftpStream.on('EXTENDED', async (reqid: number, extName: string, extData: Buffer) => { await SFTP_EXTENDED(service, reqid, extName, extData) });
   });
 }
 
@@ -238,7 +219,7 @@ async function SFTP_OPEN(self: SftpConnectionInstance, reqid: number, filename: 
     const key = crypto.randomBytes(16).toString('hex');
     const handle = Buffer.from(key, 'ascii');
 
-    logger.info('SFTP', 'OPEN', `for: '${normalized}' (${filename}), handle: ${key}`);
+    //logger.info('SFTP', 'OPEN', `for: '${normalized}' (${filename}), handle: ${key}`);
 
     const entry: SftpHandleEntry = {
       path: normalized,
@@ -954,6 +935,8 @@ export const OPEN_MODE = {
 
 // #endregion
 
+
+
 const server = new ImmichSftpServer(createServerConfig(), (con: SftpConnection) =>
 {
   logger.info('SFTP', 'SERVER', 'Client connected');
@@ -963,8 +946,10 @@ const server = new ImmichSftpServer(createServerConfig(), (con: SftpConnection) 
   if (con.fsBackend == null) con.fsBackend = new ImmichFileSystem();
   if (con.cfg == null) con.cfg = createConnectionConfig();
 
+
   con.on('authentication', async (ctx) => { await TCP_Authentication(con, ctx) });
   con.on('end', async () => { await TCP_End(con) });
   con.on('greeting', (greeting: string) => { TCP_Greeting(con, greeting) });
-  con.on('ready', () => { TCP_Ready(con) });
+  con.on('session', (accept, reject) => { TCP_Session(con, accept, reject); });
+  con.on('error', (err) => { TCP_Error(con, err) });
 });
