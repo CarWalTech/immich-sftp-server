@@ -295,6 +295,7 @@ async function SFTP_READ(self: SftpConnectionInstance, reqid: number, handle: Bu
         {
           entry.readNode = new VirtualContentBuffer(backendResult);
         }
+        entry.readSize = entry.readNode!.size;  // keep in sync with OPEN path so FSTAT is always accurate
       })();
     }
 
@@ -520,6 +521,24 @@ async function SFTP_FSTAT(self: SftpConnectionInstance, reqid: number, handle: B
         size: entry.writeNode.size,
         atime: Date.now() / 1000,
         mtime: Date.now() / 1000
+      });
+    }
+
+    // For read handles: await the download so we return the size of the data the
+    // client will actually receive, not the backend's metadata size. This matters
+    // when the download endpoint differs from the original (e.g. preview/thumbnail
+    // mode) — mismatched sizes cause clients like Dolphin to discard truncated data.
+    if (entry.readInitPromise)
+    {
+      await entry.readInitPromise;
+      const now = Date.now() / 1000;
+      return self.sftpStream.attrs(reqid, {
+        mode: 0o100644,
+        uid: 0,
+        gid: 0,
+        size: entry.readSize ?? entry.readNode?.size ?? 0,
+        atime: now,
+        mtime: now
       });
     }
 
