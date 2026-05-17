@@ -5,7 +5,7 @@ import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { PathUtils } from "../../utils/path-utils";
 import { ImmichFileSystem } from "../immich-file-system";
-import { ImmichAlbumBase } from "../utils/immich-api-utils";
+import { getAssetMtime, ImmichAlbumBase } from "../utils/immich-api-utils";
 import { ImmichAssetUtils } from "../utils/immich-asset-utils";
 import { ALBUM_BROWSER_LINK_FILE_NAME, ALBUM_METADATA_FILE_NAME } from "../utils/immich-metadata-utils";
 import { ImmichAsset } from "../utils/immich-asset-utils";
@@ -19,7 +19,7 @@ export class ImmichVirtualAssetFile extends VirtualFile
 
     constructor(asset: ImmichAsset, fsName: string, parent: VirtualDirectory, file_system: ImmichFileSystem)
     {
-        super(fsName, ImmichAssetUtils.getAssetMtime(asset), parent)
+        super(fsName, getAssetMtime(asset), parent)
         this.parent_directory = parent
         this.file_system = file_system
         this.asset = asset
@@ -42,7 +42,7 @@ export class ImmichVirtualAssetFile extends VirtualFile
 
     async event_stat(): Promise<VirtualMetadata>
     {
-        return VirtualMetadata.file_ro(this.name, this.asset.fileSizeInByte, ImmichAssetUtils.getAssetMtime(this.asset));
+        return VirtualMetadata.file_ro(this.name, this.asset.fileSizeInByte, getAssetMtime(this.asset));
     }
 
     async event_readfile(): Promise<VirtualContentBuffer>

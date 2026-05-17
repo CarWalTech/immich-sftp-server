@@ -6,7 +6,7 @@ import axios from "axios";
 import isValidFilename from 'valid-filename';
 import FormData from 'form-data';
 
-import { ImmichAlbumDirectoryInfo, ImmichTagDirectoryInfo, ImmichTag, mapTagFromApi, applyAlbumDetails, extractCurrentUser, findAlbumNode, getVirtualAlbumTree, ImmichAlbumApiResponse, ImmichAlbumsDirectoryNode, ImmichUser, mapAlbumFromApi } from "./utils/immich-api-utils";
+import { ImmichAlbumDirectoryInfo, ImmichTagDirectoryInfo, ImmichTag, mapTagFromApi, applyAlbumDetails, extractCurrentUser, findAlbumNode, getVirtualAlbumTree, ImmichAlbumApiResponse, ImmichAlbumsDirectoryNode, ImmichUser, mapAlbumFromApi, mapAssetFromApi, getAssetMtime, mapFilesFromAssets } from "./utils/immich-api-utils";
 import { config, loadSettingsForUser, UserDisplaySettings, UserScopedConfig } from "../config";
 import { PathUtils } from "../utils/path-utils";
 import { AlbumMetadataDocumentUtils } from "./utils/immich-metadata-utils";
@@ -20,24 +20,28 @@ import { isObjectWithId } from "../utils/common-utils";
 import { logger } from '../logger';
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
 import { VirtualContentBufferUtils } from "../filesystem/virtual-content-buffer";
-import { CachedEntry, ImmichSessionCache } from './immich-session-cache';
+import { ImmichCachedEntry, ImmichSessionCache } from './immich-session-cache';
+import { ImmichVirtualAssetFile } from './collections/immich-virtual-asset-file';
+import { ImmichAlbumFolder } from './collections/immich-album-folder';
+import { ImmichVirtualDirectory } from './collections/immich-virtual-directory';
 
 export class ImmichAPI
 {
     private immichAccessToken: string = '';
     private authMode: 'bearer' | 'api-key' = 'bearer';
-    private uploadQueue: Array<ImmichUploadQueueItem> = [];
+    private uploadQueue: Array<ImmichUploadItem> = [];
     private currentUser: ImmichUser | null = null;
     private userSettings: UserScopedConfig;
     private userDisplaySettings: UserDisplaySettings | null = null;
     private shouldLogoutSession = false;
+    private assetFileNamePattern: string = ""
     private readonly baseUrl;
 
     constructor(immich_url: string)
     {
         this.baseUrl = immich_url;
         this.userSettings = loadSettingsForUser();
-        ImmichAssetUtils.setAssetFileNamePattern(this.userSettings.assetFileNamePattern);
+        this.assetFileNamePattern = this.userSettings.assetFileNamePattern;
     }
 
     // #region User Authentication
@@ -150,6 +154,29 @@ export class ImmichAPI
     {
         return this.userSettings
     }
+    public getAssetDisplayName(asset: ImmichAsset): string
+    {
+        const extension = path.extname(asset.originalFileName);
+        const timestamp = getAssetMtime(asset);
+        const dt = DateTime.fromSeconds(timestamp, { zone: config.TZ });
+        const formattedTimestamp = `${dt.toFormat('yyyyLLdd_HHmmss')}${String(dt.millisecond).padStart(3, '0')}`;
+        const shortId = asset.id.slice(0, 8);
+
+        switch (this.assetFileNamePattern)
+        {
+            case 'assetUuid':
+                return `${asset.id}${extension}`;
+            case 'shortUuid':
+                return `img_${shortId}${extension}`;
+            case 'date':
+                return `${formattedTimestamp}${extension}`;
+            case 'dateUuid':
+                return `${formattedTimestamp}_${shortId}${extension}`;
+            case 'original':
+            default:
+                return asset.originalFileName;
+        }
+    }
     public async getUserDisplaySettings()
     {
         if (this.userDisplaySettings) return this.userDisplaySettings;
@@ -169,6 +196,7 @@ export class ImmichAPI
         this.userDisplaySettings = result;
         return this.userDisplaySettings;
     }
+
     // #endregion
 
     // #region Api Function
@@ -176,7 +204,7 @@ export class ImmichAPI
     {
         try
         {
-            logger.info(`ImmichAPI`, `${logAction}`, `Sending: ${method} /api/${endpoint}`);
+            logger.debug(`ImmichAPI`, `${logAction}`, `Sending: ${method} /api/${endpoint}`);
 
             const isDownload = method === 'GET' && endpoint.startsWith('assets/') && (endpoint.endsWith('/original') || endpoint.endsWith('/thumbnail'));
 
@@ -202,7 +230,7 @@ export class ImmichAPI
 
 
             //if (skipResponseLog == true)
-            logger.info(`ImmichAPI`, `${logAction}`, `Received (${logAction}):`, response.status, '[Data skipped]');
+            logger.debug(`ImmichAPI`, `${logAction}`, `Received (${logAction}):`, response.status, '[Data skipped]');
             //else
             //logger.info(`ImmichAPI`, `${logAction}`, `Received:`, response.status, this.filterLogData(response.data));
             return response.data;
@@ -302,96 +330,50 @@ export class ImmichAPI
 
         return output;
     }
+
     // #endregion
 
     // #region Fetch Methods
     public async FETCH_Albums(): Promise<ImmichAlbumDirectoryInfo[]>
     {
-        const cacheKey = `albums_all`;
+        const [ownAlbumsResponse] = await Promise.all([
+            this.callApi({
+                method: 'GET',
+                endpoint: 'albums',
+                logAction: 'All own albums',
+                skipResponseLog: true,
+            })
+        ]);
 
-        return await this.cache.cachedFetch({
-            cacheMap: this.cache.albums,
-            cacheKey,
-            fetchMeta: async () =>
+        const ownAlbums = Array.isArray(ownAlbumsResponse) ? ownAlbumsResponse : [];
+        const combinedByAlbumId = new Map<string, Record<string, unknown>>();
+
+        for (const album of [...ownAlbums])
+        {
+            if (isObjectWithId(album))
             {
-                const response = await this.callApi({
-                    method: 'GET',
-                    endpoint: 'albums',
-                    logAction: '',
-                    skipResponseLog: true,
-                });
-
-                const first = Array.isArray(response) ? response[0] : null;
-                return { updatedAt: first?.updatedAt };
-            },
-            fetchData: async () =>
-            {
-                const [ownAlbumsResponse] = await Promise.all([
-                    this.callApi({
-                        method: 'GET',
-                        endpoint: 'albums',
-                        logAction: 'All own albums',
-                        skipResponseLog: true,
-                    })
-                ]);
-
-                const ownAlbums = Array.isArray(ownAlbumsResponse) ? ownAlbumsResponse : [];
-                const combinedByAlbumId = new Map<string, Record<string, unknown>>();
-
-                for (const album of [...ownAlbums])
-                {
-                    if (isObjectWithId(album))
-                    {
-                        combinedByAlbumId.set(String(album.id), album);
-                    }
-                }
-
-                return this.filterAlbums(Array.from(combinedByAlbumId.values()));
+                combinedByAlbumId.set(String(album.id), album);
             }
-        });
+        }
+
+        return this.filterAlbums(Array.from(combinedByAlbumId.values()));
     }
     public async FETCH_AlbumsForAssetId(assetId: string): Promise<ImmichAlbumDirectoryInfo[]>
     {
-        const cacheKey = `albums_for_asset_${assetId}`;
-
-        return await this.cache.cachedFetch({
-            cacheMap: this.cache.albums,
-            cacheKey,
-            fetchMeta: async () =>
-            {
-                const response = await this.callApi({
-                    method: 'GET',
-                    endpoint: `albums?assetId=${assetId}`,
-                    logAction: '',
-                    skipResponseLog: true,
-                });
-
-                const first = Array.isArray(response) ? response[0] : null;
-                return { updatedAt: first?.updatedAt };
-            },
-            fetchData: async () =>
-            {
-                // Check in which albums the asset is used
-                const response = await this.callApi({
-                    method: 'GET',
-                    endpoint: `albums?assetId=${assetId}`,
-                    logAction: 'Albums for assetId',
-                    skipResponseLog: true,
-                });
-
-                //Process and filter albums
-                return this.filterAlbums(response);
-            }
+        // Check in which albums the asset is used
+        const response = await this.callApi({
+            method: 'GET',
+            endpoint: `albums?assetId=${assetId}`,
+            logAction: 'Albums for assetId',
+            skipResponseLog: true,
         });
+
+        //Process and filter albums
+        return this.filterAlbums(response);
     }
-    public async FETCH_VirtualAlbumTree(): Promise<ImmichAlbumsDirectoryNode>
+    public async FETCH_AlbumVirtualTree()
     {
-        const cacheKey = `virtual_album_tree`;
-
-        return await this.cache.cachedFetch({
-            cacheMap: this.cache.albums,
-            cacheKey,
-
+        return await this.cache.fetchCachedAlbumTree(`ROOT`, {
             // Validate using album list metadata
             fetchMeta: async () =>
             {
@@ -407,14 +389,9 @@ export class ImmichAPI
             }
         });
     }
-    public async FETCH_VirtualAlbumBranch(path_id: string)
+    public async FETCH_AlbumVirtualBranch(path_id: string)
     {
-        const cacheKey = `virtual_album_branch_${path_id}`;
-
-        return await this.cache.cachedFetch({
-            cacheMap: this.cache.albums,
-            cacheKey,
-
+        return await this.cache.fetchCachedAlbumTree(`${path_id}`, {
             fetchMeta: async () =>
             {
                 const albums = await this.FETCH_Albums();
@@ -426,91 +403,43 @@ export class ImmichAPI
             {
                 const albums = await this.FETCH_Albums();
                 const tree = getVirtualAlbumTree(albums);
-                return findAlbumNode(tree, n => n.path_id === path_id);
+                return findAlbumNode(tree, n => n.path_id === path_id) ?? undefined;
             }
         });
     }
-    public async FETCH_Tags(): Promise<ImmichTag[]>
+
+    public async FETCH_AssetsForNonAlbums(parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetFile[]>
     {
-        const cacheKey = `tags_all`;
+        const cacheKey = parent.fullpath;
 
-        return await this.cache.cachedFetch({
-            cacheMap: this.cache.tags,
-            cacheKey,
-            fetchMeta: async () =>
-            {
-                const response = await this.callApi({
-                    method: 'GET',
-                    endpoint: 'tags',
-                    logAction: '',
-                    skipResponseLog: true,
-                });
-
-                const first = Array.isArray(response) ? response[0] : null;
-                return { updatedAt: first?.updatedAt };
-            },
-            fetchData: async () =>
-            {
-                const response = await this.callApi({
-                    method: 'GET',
-                    endpoint: 'tags',
-                    logAction: 'All tags',
-                    skipResponseLog: true,
-                });
-
-                if (!Array.isArray(response)) return [];
-
-                const tags: ImmichTag[] = [];
-                for (const tag of response)
-                {
-                    if (!tag?.id || typeof tag?.id !== 'string') continue;
-                    tags.push(mapTagFromApi(tag));
-                }
-                return tags;
-            }
-        });
-    }
-    public async FETCH_AssetsForNonAlbums(): Promise<ImmichAsset[]>
-    {
-        const cacheKey = `assets_non_albums`;
-
-        return await this.cache.cachedFetch({
-            cacheMap: this.cache.assets,
-            cacheKey,
+        return await this.cache.fetchedCachedAssetLists(cacheKey, {
             fetchData: async () =>
             {
                 const normal_items = await this.FETCH_AssetsByMetadata({ isNotInAlbum: true })
                 const archived_items = await this.FETCH_AssetsByMetadata({ isNotInAlbum: true, visibility: "archive" })
                 const all_assets: ImmichAsset[] = [...normal_items, ...archived_items]
-                return all_assets
+                return mapFilesFromAssets(all_assets, parent, reserved_names)
             }
         });
     }
-    public async FETCH_AssetsForTrash(): Promise<ImmichAsset[]>
+    public async FETCH_AssetsForTrash(parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetFile[]>
     {
-        const cacheKey = `assets_trash`;
+        const cacheKey = parent.fullpath;
 
-        return await this.cache.cachedFetch({
-            cacheMap: this.cache.assets,
-            cacheKey,
-
+        return await this.cache.fetchedCachedAssetLists(cacheKey, {
             fetchData: async () =>
             {
                 const normal_items = await this.FETCH_AssetsByMetadata({ trashedBefore: DateTime.now().toJSDate().toISOString() })
                 const archived_items = await this.FETCH_AssetsByMetadata({ trashedBefore: DateTime.now().toJSDate().toISOString(), visibility: "archive" })
                 const all_assets: ImmichAsset[] = [...normal_items, ...archived_items]
-                return all_assets
+                return mapFilesFromAssets(all_assets, parent, reserved_names)
             }
         });
     }
-    public async FETCH_AssetsForAlbum(album: ImmichAlbumDirectoryInfo): Promise<void>
+    public async FETCH_AssetsForAlbum(album: ImmichAlbumDirectoryInfo, parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetFile[]>
     {
-        const cacheKey = `assets_for_album_${album.id}`;
-
-        const assets = await this.cache.cachedFetch({
-            cacheMap: this.cache.assets,
-            cacheKey,
-
+        const cacheKey = parent.fullpath;
+        return await this.cache.fetchedCachedAssetLists(cacheKey, {
             // Validate using album metadata
             fetchMeta: async () =>
             {
@@ -540,26 +469,14 @@ export class ImmichAPI
                 const archived_items = await this.FETCH_AssetsByMetadata({ albumIds: [album.id], visibility: "archive" })
 
                 const all_assets: ImmichAsset[] = [...normal_items, ...archived_items]
-
-                // TODO: Maybe a Better Filesize Detection?
-                // for (const asset of all_assets)
-                //    asset.fileSizeInByte = await this.SERVER_GetAssetFileSize(asset);
-
-                return all_assets
+                return mapFilesFromAssets(all_assets, parent, reserved_names)
             }
         });
-
-        album.assets = assets
     }
-    public async FETCH_AssetsForTag(tag: ImmichTagDirectoryInfo): Promise<void>
+    public async FETCH_AssetsForTag(tag: ImmichTagDirectoryInfo, parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetFile[]>
     {
-
-        const cacheKey = `assets_for_tag_${tag.id}`;
-
-        const assets = await this.cache.cachedFetch({
-            cacheMap: this.cache.assets,
-            cacheKey,
-
+        const cacheKey = parent.fullpath;
+        return await this.cache.fetchedCachedAssetLists(cacheKey, {
             // Validate using tag metadata
             fetchMeta: async () =>
             {
@@ -579,59 +496,67 @@ export class ImmichAPI
                 const archived_items = await this.FETCH_AssetsByMetadata({ tagIds: [tag.id], visibility: "archive" })
 
                 const all_assets: ImmichAsset[] = [...normal_items, ...archived_items]
-                return all_assets
+                return mapFilesFromAssets(all_assets, parent, reserved_names)
             }
         });
-
-        tag.assets = assets;
     }
     public async FETCH_AssetsByMetadata(query: { albumIds?: string[], visibility?: string, tagIds?: string[]; personIds?: string[], isNotInAlbum?: boolean, trashedAfter?: string, trashedBefore?: string }): Promise<ImmichAsset[]>
     {
-        const cacheKey = `metadata_${JSON.stringify(query)}`;
+        const byAssetId = new Map<string, ImmichAsset>();
+        let page = 1;
 
-        return await this.cache.cachedFetch({
-            cacheMap: this.cache.assets,
-            cacheKey,
-            fetchData: async () =>
+        while (true)
+        {
+            const response = await this.callApi({
+                method: 'POST',
+                endpoint: 'search/metadata',
+                data: JSON.stringify({
+                    ...query,
+                    page,
+                    size: 1000,
+                    withDeleted: false,
+                    withExif: true,
+                }),
+                logAction: 'Search assets',
+                skipResponseLog: true,
+            });
+
+            const items = Array.isArray(response?.assets?.items) ? response.assets.items : [];
+            for (const item of items)
             {
-                const byAssetId = new Map<string, ImmichAsset>();
-                let page = 1;
-
-                while (true)
-                {
-                    const response = await this.callApi({
-                        method: 'POST',
-                        endpoint: 'search/metadata',
-                        data: JSON.stringify({
-                            ...query,
-                            page,
-                            size: 1000,
-                            withDeleted: false,
-                            withExif: true,
-                        }),
-                        logAction: 'Search assets',
-                        skipResponseLog: true,
-                    });
-
-                    const items = Array.isArray(response?.assets?.items) ? response.assets.items : [];
-                    for (const item of items)
-                    {
-                        const asset = ImmichAssetUtils.mapAssetFromApi(item);
-                        byAssetId.set(asset.id, asset);
-                    }
-
-                    const nextPageRaw = response?.assets?.nextPage;
-                    const nextPage = typeof nextPageRaw === 'string' ? Number.parseInt(nextPageRaw, 10) : Number.NaN;
-                    if (!Number.isInteger(nextPage) || nextPage <= page || items.length === 0)
-                    {
-                        break;
-                    }
-                    page = nextPage;
-                }
-
-                return Array.from(byAssetId.values());
+                const asset = mapAssetFromApi(item);
+                byAssetId.set(asset.id, asset);
             }
+
+            const nextPageRaw = response?.assets?.nextPage;
+            const nextPage = typeof nextPageRaw === 'string' ? Number.parseInt(nextPageRaw, 10) : Number.NaN;
+            if (!Number.isInteger(nextPage) || nextPage <= page || items.length === 0)
+            {
+                break;
+            }
+            page = nextPage;
+        }
+
+        return Array.from(byAssetId.values());
+    }
+    public async FETCH_Tags(): Promise<ImmichTag[]>
+    {
+        const response = await this.callApi({
+            method: 'GET',
+            endpoint: 'tags',
+            logAction: 'All tags',
+            skipResponseLog: true,
         });
+
+        if (!Array.isArray(response)) return [];
+
+        const tags: ImmichTag[] = [];
+        for (const tag of response)
+        {
+            if (!tag?.id || typeof tag?.id !== 'string') continue;
+            tags.push(mapTagFromApi(tag));
+        }
+        return tags;
     }
     // #endregion
 
@@ -649,7 +574,7 @@ export class ImmichAPI
     {
         return this.uploadQueue.find(f => f.longname === longname)
     }
-    public QUEUE_AppendFile(data: ImmichUploadQueueItem)
+    public QUEUE_AppendFile(data: ImmichUploadItem)
     {
         logger.info(`ImmichAPI`, 'QUEUE_AppendFile', `Pushed: ${data.longname}`)
         this.uploadQueue.push(data);
@@ -671,7 +596,7 @@ export class ImmichAPI
 
         return;
     }
-    public async QUEUE_UploadFile(fileEntry: ImmichUploadQueueItem, mtime: number)
+    public async QUEUE_UploadFile(fileEntry: ImmichUploadItem, mtime: number)
     {
         const node = fileEntry.node; // VirtualNodeBuffer
         const filename = fileEntry.filename;
@@ -753,10 +678,7 @@ export class ImmichAPI
             logAction: 'Delete asset'
         });
 
-        this.cache.invalidateAfterMutation({
-            assetIds: [asset.id],
-            invalidateAllDirectories: true
-        });
+        this.cache.invalidateAssets([asset.id]);
 
         return result;
     }
@@ -768,10 +690,7 @@ export class ImmichAPI
             logAction: 'Delete album'
         });
 
-        this.cache.invalidateAfterMutation({
-            albumIds: [album.id],
-            invalidateAllDirectories: true
-        });
+        this.cache.invalidateAlbums();
     }
     async SERVER_DeleteAssetFromAlbum(album: ImmichAlbumDirectoryInfo, asset: ImmichAsset): Promise<void>
     {
@@ -800,12 +719,9 @@ export class ImmichAPI
             logAction: 'Remove asset from album'
         });
 
-        this.cache.invalidateAfterMutation({
-            albumIds: [album.id],
-            assetIds: [assetId]
-        });
+        this.cache.invalidateAlbumContents([album.id]);
     }
-    async SERVER_CreateAlbum(albumName: string)
+    async SERVER_CreateAlbum(albumName: string, parent?: ImmichAlbumDirectoryInfo)
     {
         await this.callApi({
             method: 'POST',
@@ -814,9 +730,7 @@ export class ImmichAPI
             logAction: 'Create album'
         });
 
-        this.cache.invalidateAfterMutation({
-            invalidateAllDirectories: true
-        });
+        this.cache.invalidateAlbums()
     }
     async SERVER_AddAssetToAlbum(album: ImmichAlbumDirectoryInfo, assetId: any)
     {
@@ -827,10 +741,7 @@ export class ImmichAPI
             logAction: 'Add asset to album'
         });
 
-        this.cache.invalidateAfterMutation({
-            albumIds: [album.id],
-            assetIds: [assetId]
-        });
+        this.cache.invalidateAlbumContents([album.id]);
     }
     async SERVER_AddAssetToUnsorted(assetId: any)
     {
@@ -875,9 +786,7 @@ export class ImmichAPI
             logAction: 'Rename album'
         });
 
-        this.cache.invalidateAfterMutation({
-            albumIds: [album.id]
-        });
+        this.cache.invalidateAlbums()
     }
     async SERVER_RenameTag(tag: ImmichTag, newDisplayName: string)
     {
@@ -886,10 +795,6 @@ export class ImmichAPI
             endpoint: `tags/${tag.id}`,
             data: JSON.stringify({ name: newDisplayName }),
             logAction: 'Rename tag'
-        });
-
-        this.cache.invalidateAfterMutation({
-            tagIds: [tag.id]
         });
     }
     async SERVER_ValidateUpload(checksum: string, filename: string)
@@ -911,7 +816,7 @@ export class ImmichAPI
         if (config.localFilesMode)
         {
             const filepath = "/immich" + asset.originalPath;
-            const buf = VirtualContentBufferUtils.bufferFromBuffer(fs.readFileSync(filepath));
+            const buf = new VirtualContentBuffer(undefined, fs.readFileSync(filepath));
             this.cache.assetFileBuffers.set(asset.id, buf);
             return buf;
         }
@@ -959,11 +864,7 @@ export class ImmichAPI
             data: data,
             logAction: 'Upload asset'
         });
-
-        this.cache.invalidateAfterMutation({
-            invalidateAllDirectories: true
-        });
-
+        this.cache.invalidateTree();
         return result;
     }
     async SERVER_RestoreAsset(assetId: string)
@@ -975,16 +876,13 @@ export class ImmichAPI
             logAction: 'Restore asset'
         });
 
-        this.cache.invalidateAfterMutation({
-            assetIds: [assetId],
-            invalidateAllDirectories: true
-        });
+        this.cache.invalidateAssets([assetId]);
     }
 
     // #endregion
 }
 
-export interface ImmichUploadQueueItem
+export interface ImmichUploadItem
 {
     filename: string;
     longname: string;
@@ -992,3 +890,4 @@ export interface ImmichUploadQueueItem
     uploadToAlbum?: ImmichAlbumDirectoryInfo;
     removeFromOtherAlbums?: boolean;
 }
+

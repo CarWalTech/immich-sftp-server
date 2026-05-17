@@ -7,7 +7,7 @@ import { ImmichVirtualAssetFile } from "./immich-virtual-asset-file";
 import { ImmichTagsDirectory } from "./immich-tags-directory";
 import { ImmichTagMetadataFile } from "./immich-tag-metadata";
 import { TAG_METADATA_FILE_NAME } from "../utils/immich-metadata-utils";
-import { collectTaggedAssets, ImmichTagsDirectoryNode } from "../utils/immich-api-utils";
+import { ImmichTagsDirectoryNode } from "../utils/immich-api-utils";
 
 export class ImmichTagFolder extends VirtualDirectory
 {
@@ -42,7 +42,6 @@ export class ImmichTagFolder extends VirtualDirectory
         }
         else throw Error("Can't figure out album path because the folder parents seem to be invalid")
     }
-
     async event_rebuild(): Promise<Map<string, VirtualNode>>
     {
         var sub_folders = new Map([...this.node_data.children.values()].map(node => ([node.fsName, new ImmichTagFolder(this.file_system, this.tags_root, this, node) as VirtualNode])))
@@ -53,7 +52,7 @@ export class ImmichTagFolder extends VirtualDirectory
             ])
 
             var reserved_names = Array.from(sub_folders.keys()).concat(Array.from(metadata_files.keys()))
-            var assets = await collectTaggedAssets(this, new Set(reserved_names));
+            var assets = await this.file_system.getApi().FETCH_AssetsForTag(this.node_data.tag, this, new Set(reserved_names));
             var asset_files = new Map(assets.map(asset => ([asset.name, asset as VirtualNode])))
             return new Map([...Array.from(sub_folders.entries()), ...Array.from(metadata_files.entries()), ...Array.from(asset_files.entries())]);
         }

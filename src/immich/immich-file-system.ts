@@ -81,19 +81,12 @@ export class ImmichFileSystem implements VirtualFileSystem
         if (node && !node.isDir())
         {
             await (node as VirtualFile).event_writefile(tmpFile);
-
-            this.getCache().invalidateAssetNode(node);
-            this.getCache().invalidateFilePath(filename);
             return;
         }
 
         if (parent && parent.isDir())
         {
             await parent.event_createfile(name, tmpFile);
-
-            this.getCache().invalidateDirectoryPath(parent.fullpath);
-            this.getCache().invalidateFilePath(filename);
-
             await this.memory.flushQueued(filename);
             return;
         }
@@ -133,18 +126,12 @@ export class ImmichFileSystem implements VirtualFileSystem
         }
         else if (oldRes.name == newRes.name && oldRes.parent.fullpath != newRes.parent.fullpath)
         {
-            this.getCache().invalidateAssetNode(oldRes.node);
-            this.getCache().invalidateFilePath(oldFileName);
-            this.getCache().invalidateFilePath(newFileName);
-            this.getCache().invalidateAllDirectories();
+            this.getCache().invalidateTree();
             return await oldRes.parent.event_movenode(oldRes.node, newRes.parent)
         }
         else
         {
-            this.getCache().invalidateAssetNode(oldRes.node);
-            this.getCache().invalidateFilePath(oldFileName);
-            this.getCache().invalidateFilePath(newFileName);
-            this.getCache().invalidateAllDirectories();
+            this.getCache().invalidateTree();
             return await oldRes.node.event_rename(newRes.name)
         }
 
@@ -158,10 +145,6 @@ export class ImmichFileSystem implements VirtualFileSystem
             return await this.memory.remove(filename);
         }
 
-        this.getCache().invalidateAssetNode(node);
-        this.getCache().invalidateFilePath(filename);
-        this.getCache().invalidateDirectoryPath(parent?.fullpath ?? "/");
-
         return await node.event_delete();
     }
     async mkdir(path: string)
@@ -172,10 +155,6 @@ export class ImmichFileSystem implements VirtualFileSystem
         if (!parent) return false;
 
         const result = await parent.event_mkdir(name);
-
-        this.getCache().invalidateDirectoryPath(parent.fullpath);
-        this.getCache().invalidateDirectoryPath(path);
-
         return result;
     }
 

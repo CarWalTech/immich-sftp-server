@@ -1,56 +1,62 @@
 import { dirname } from "path";
 import { VirtualNode } from "../filesystem/virtual-node";
 import { ImmichVirtualAssetFile } from "./collections/immich-virtual-asset-file";
-import { ImmichUser } from "./utils/immich-api-utils";
+import { ImmichAlbumDirectoryInfo, ImmichAlbumsDirectoryNode, ImmichUser } from "./utils/immich-api-utils";
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
+import { ImmichAsset } from "./utils/immich-asset-utils";
+import { VirtualFile } from "webdav-server";
+import { VirtualPathInfo } from "../filesystem/virtual-path-info";
+import { ImmichAlbumsDirectory } from "./collections/immich-albums-directory";
+import { ImmichRootTrashDirectory } from "./collections/immich-root-commons";
+import { ImmichAlbumFolder } from "./collections/immich-album-folder";
+import { VirtualDirectory } from "../filesystem/virtual-directory";
 
-export interface CachedEntry<T>
+export interface ImmichCachedEntry<T>
 {
     data: T;
     updatedAt: string;
     checksum?: string;
 }
 
-export interface CacheInvalidationOptions
+export interface ImmichCacheInvalidationOptions
 {
     assetIds?: string[];
     albumIds?: string[];
-    tagIds?: string[];
     directoryPaths?: string[];
     invalidateAllDirectories?: boolean;
 }
 
-export interface CatchFetchArgs<T>
+export interface ImmichAssetCacheFetchArgs
 {
-    cacheMap: Map<string, CachedEntry<T>>;
-    cacheKey: string;
     fetchMeta?: () => Promise<{ updatedAt?: string; checksum?: string }>;
-    fetchData: () => Promise<T>;
+    fetchData: () => Promise<ImmichVirtualAssetFile[]>;
+}
+
+export interface ImmichTreeCacheFetchArgs
+{
+    fetchMeta?: () => Promise<{ updatedAt?: string; checksum?: string }>;
+    fetchData: () => Promise<ImmichAlbumsDirectoryNode | undefined>;
 }
 
 export class ImmichSessionCache
 {
-    albums: Map<string, CachedEntry<any>>;
-    tags: Map<string, CachedEntry<any>>;
-    assets: Map<string, CachedEntry<any>>;
-    directories: Map<string, CachedEntry<any>>;
+    albumsMap: Map<string, string>
     assetFileSizes: Map<string, number>;
-    assetDownloadUrls: Map<string, string>;
     assetFileBuffers: Map<string, VirtualContentBuffer>;
-    albumAssetListings: Map<string, ImmichVirtualAssetFile[]>;
+
+    assetTree: Map<string, ImmichCachedEntry<ImmichVirtualAssetFile[]>>;
+    albumsTree: Map<string, ImmichCachedEntry<ImmichAlbumsDirectoryNode | undefined>>;
 
     private static _instances: Map<string, ImmichSessionCache> = new Map();
 
     constructor()
     {
-        this.albums = new Map()
-        this.tags = new Map()
-        this.assets = new Map()
-        this.directories = new Map()
+        this.assetTree = new Map()
         this.assetFileSizes = new Map()
-        this.assetDownloadUrls = new Map()
         this.assetFileBuffers = new Map()
-        this.albumAssetListings = new Map()
+
+        this.albumsMap = new Map()
+        this.albumsTree = new Map()
     }
 
     public static Instance(user: ImmichUser | null): ImmichSessionCache
@@ -72,10 +78,9 @@ export class ImmichSessionCache
 
     }
 
-    public async cachedFetch<T>({ cacheMap, cacheKey, fetchMeta, fetchData, }: CatchFetchArgs<T>): Promise<T>
+    public async fetchedCachedAssetLists(cacheKey: string, { fetchMeta, fetchData }: ImmichAssetCacheFetchArgs): Promise<ImmichVirtualAssetFile[]>
     {
-
-        const cached = cacheMap.get(cacheKey);
+        const cached = this.assetTree.get(cacheKey);
 
         // 1. If cached, validate metadata
         if (cached && fetchMeta)
@@ -100,104 +105,81 @@ export class ImmichSessionCache
         const updatedAt = (data as any)?.updatedAt ?? Date.now().toString();
         const checksum = (data as any)?.checksum;
 
-        cacheMap.set(cacheKey, { data, updatedAt, checksum });
+        this.assetTree.set(cacheKey, { data, updatedAt, checksum });
 
         return data;
     }
-    public invalidateAfterMutation(opts: CacheInvalidationOptions)
+    public async fetchCachedAlbumTree(cacheKey: string, { fetchMeta, fetchData, }: ImmichTreeCacheFetchArgs): Promise<ImmichAlbumsDirectoryNode | undefined>
     {
-        if (opts.assetIds)
-        {
-            for (const id of opts.assetIds)
-            {
-                this.assets.delete(id);
-                this.assetFileSizes.delete(id);
-                this.assetFileBuffers.delete(id);
+        const cached = this.albumsTree.get(cacheKey);
 
-                // delete all download URLs for this asset
-                for (const key of this.assetDownloadUrls.keys())
+        // 1. If cached, validate metadata
+        if (cached && fetchMeta)
+        {
+            try
+            {
+                const meta = await fetchMeta();
+                if (meta.updatedAt && meta.updatedAt === cached.updatedAt)
                 {
-                    if (key.startsWith(id + "_"))
-                    {
-                        this.assetDownloadUrls.delete(key);
-                    }
+                    return cached.data;
                 }
-            }
-        }
-
-        if (opts.albumIds)
-        {
-            for (const id of opts.albumIds)
+            } catch (_)
             {
-                this.albums.delete(id);
-                this.albumAssetListings.delete(id);
+                // If metadata fetch fails, fall through to full fetch
             }
         }
 
-        if (opts.tagIds)
-        {
-            for (const id of opts.tagIds)
-            {
-                this.tags.delete(id);
-            }
-        }
+        // 2. Fetch full data
+        const data = await fetchData();
 
-        if (opts.directoryPaths)
-        {
-            for (const p of opts.directoryPaths)
-            {
-                this.directories.delete(p);
-            }
-        }
+        // 3. Store in cache
+        const updatedAt = (data as any)?.updatedAt ?? Date.now().toString();
+        const checksum = (data as any)?.checksum;
 
-        if (opts.invalidateAllDirectories)
-        {
-            this.directories.clear();
-        }
+        this.albumsTree.set(cacheKey, { data, updatedAt, checksum });
+
+        const album = data?.album ?? undefined
+
+        if (album) this.albumsMap.set(cacheKey, cacheKey);
+
+        return data;
     }
-    public invalidateAssetNode(node: VirtualNode)
-    {
-        if (node instanceof ImmichVirtualAssetFile)
-        {
-            const id = node.asset_id;
 
-            this.assets.delete(id);
-            this.assetFileBuffers.delete(id);
+    public invalidateAssets(assetIds: string[])
+    {
+        for (const id of assetIds)
+        {
             this.assetFileSizes.delete(id);
-
-            // delete all download URLs for this asset
-            for (const key of this.assetDownloadUrls.keys())
+            this.assetFileBuffers.delete(id);
+        }
+    }
+    public invalidateAlbums()
+    {
+        this.albumsMap.clear()
+        this.albumsTree.clear()
+    }
+    public invalidateAlbumContents(albumIds: string[])
+    {
+        for (const id of albumIds)
+        {
+            const path = this.albumsMap.get(id)
+            if (path)
             {
-                if (key.startsWith(id + "_"))
-                {
-                    this.assetDownloadUrls.delete(key);
-                }
+                this.albumsTree.delete(path)
             }
         }
     }
-    public invalidateFilePath(path: string)
+    public invalidateTree()
     {
-        // directory listing cache is path-based → correct
-        this.directories.delete(dirname(path));
-    }
-    public invalidateDirectoryPath(path: string)
-    {
-        this.directories.delete(path);
-    }
-    public invalidateAllDirectories()
-    {
-        this.directories.clear();
+        this.invalidateAlbums()
     }
     public invalidateAll()
     {
-        this.albums.clear();
-        this.tags.clear();
-        this.assets.clear();
-        this.directories.clear();
+        this.assetTree.clear();
         this.assetFileBuffers.clear();
         this.assetFileSizes.clear();
-        this.assetDownloadUrls.clear();
-        this.albumAssetListings.clear();
+        this.albumsMap.clear()
+        this.albumsTree.clear()
     }
 
 }

@@ -1,11 +1,7 @@
 import path from "path";
 import { BaseLogger, ILogObjMeta, ISettingsParam, ILogObj, Logger } from "tslog";
 
-const IGNORED_COMBINATIONS: Record<string, string[]> = {
-    "SFTP": [
-        "LSTAT"
-    ]
-}
+const IGNORED_COMBINATIONS: Record<string, string[]> = {}
 
 
 export class CustomLogger<LogObj> extends BaseLogger<LogObj>
@@ -55,26 +51,32 @@ export class CustomLogger<LogObj> extends BaseLogger<LogObj>
         }
 
     }
-
+    public debug(...args: unknown[]): LogObj & ILogObjMeta | undefined
+    {
+        return super.log(2, "DEBUG", ...args);
+    }
     public info(...args: unknown[]): LogObj & ILogObjMeta | undefined
     {
         if (this.is_ignored(args)) return;
         args = this.format_args(args)
-        return super.log(0, "INFO", ...args);
+        return super.log(3, "INFO", ...args);
     }
     public warn(...args: unknown[]): LogObj & ILogObjMeta | undefined
     {
-        return super.log(1, "WARN", ...args);
+        return super.log(4, "WARN", ...args);
     }
     public error(...args: unknown[]): LogObj & ILogObjMeta | undefined
     {
-        return super.log(2, "ERROR", ...args);
+        return super.log(5, "ERROR", ...args);
     }
+
+
 
 }
 const srcFilename = path.join(__dirname, "../");
 
 export const logger = new CustomLogger({
+    minLevel: 3,
     prettyLogTemplate: "{{yyyy}}.{{mm}}.{{dd}} {{hh}}:{{MM}}:{{ss}}:{{ms}}\t{{logLevelName}}\t[{{fullFilePath}}{{name}}]\n",
     prettyErrorTemplate: "\n{{errorName}} {{errorMessage}}\nerror stack:\n{{errorStack}}",
     prettyErrorStackTemplate: "  • {{fileName}}\t{{method}}\n\t{{filePathWithLine}}",
