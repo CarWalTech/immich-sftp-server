@@ -3,6 +3,7 @@ import path from "path";
 import crypto from 'crypto';
 import tmp from "tmp"
 import axios from "axios";
+import { createWriteStream } from 'fs';
 import isValidFilename from 'valid-filename';
 import FormData from 'form-data';
 
@@ -25,6 +26,48 @@ import { ImmichVirtualAssetFile } from './collections/immich-virtual-asset-file'
 import { ImmichAlbumFolder } from './collections/immich-album-folder';
 import { ImmichVirtualDirectory } from './collections/immich-virtual-directory';
 
+// Maximum number of simultaneous asset downloads per session.
+// Dolphin and similar clients open many files concurrently for thumbnailing;
+// without a cap every file in a directory triggers a download at once,
+// which exhausts bandwidth, memory, and the 30-second axios timeout.
+const MAX_CONCURRENT_DOWNLOADS = 6;
+
+// Files larger than this threshold are written to a temp file on disk
+// instead of being collected into a heap Buffer.
+const DOWNLOAD_BUFFER_THRESHOLD = 4 * 1024 * 1024; // 4 MB
+
+/**
+ * Lightweight counting semaphore for concurrency control.
+ */
+class DownloadSemaphore
+{
+    private readonly limit: number;
+    private running = 0;
+    private readonly queue: Array<() => void> = [];
+
+    constructor(limit: number) { this.limit = limit; }
+
+    acquire(): Promise<void>
+    {
+        if (this.running < this.limit)
+        {
+            this.running++;
+            return Promise.resolve();
+        }
+        return new Promise<void>(resolve =>
+        {
+            this.queue.push(() => { this.running++; resolve(); });
+        });
+    }
+
+    release(): void
+    {
+        this.running--;
+        const next = this.queue.shift();
+        if (next) next();
+    }
+}
+
 export class ImmichAPI
 {
     private immichAccessToken: string = '';
@@ -36,6 +79,7 @@ export class ImmichAPI
     private shouldLogoutSession = false;
     private assetFileNamePattern: string = ""
     private readonly baseUrl;
+    private readonly downloadSemaphore = new DownloadSemaphore(MAX_CONCURRENT_DOWNLOADS);
 
     constructor(immich_url: string)
     {
@@ -826,18 +870,56 @@ export class ImmichAPI
             ? `assets/${asset.id}/thumbnail`
             : `assets/${asset.id}/original`;
 
-        // 4. Download stream
-        const responseStream: Readable = await this.callApi({
-            method: 'GET',
-            endpoint,
-            logAction: 'Download asset',
-            respAsStream: true
-        });
+        // 4. Acquire slot — prevents a directory full of files from all downloading
+        //    simultaneously, which exhausts bandwidth and triggers the 30s timeout.
+        await this.downloadSemaphore.acquire();
 
-        // 5. Write to temp file
-        const node = await VirtualContentBufferUtils.bufferFromStream(responseStream);
+        let node: VirtualContentBuffer;
+        try
+        {
+            // 5. Stream directly from Immich, bypassing callApi so we can read
+            //    Content-Length from the response headers before choosing storage.
+            const response = await axios.request({
+                method: 'GET',
+                url: `${this.baseUrl}/api/${endpoint}`,
+                timeout: 30_000,
+                headers: {
+                    'User-Agent': 'ImmichNetworkStorage (Linux)',
+                    ...(this.authMode === 'api-key'
+                        ? { 'x-api-key': this.immichAccessToken }
+                        : { 'Authorization': `Bearer ${this.immichAccessToken}` }),
+                },
+                responseType: 'stream',
+            });
 
-        // 6. Cache the temp file buffer
+            const contentLength = parseInt(response.headers['content-length'] ?? '0', 10);
+            const stream: Readable = response.data;
+
+            logger.debug(`ImmichAPI`, 'SERVER_ReadAsset', `Downloading ${asset.id} via ${endpoint}, Content-Length=${contentLength}`);
+
+            if (contentLength > DOWNLOAD_BUFFER_THRESHOLD)
+            {
+                // Large file — stream to a temp file to avoid heap pressure.
+                // This is important when Dolphin (or similar) opens many large
+                // assets concurrently for thumbnailing.
+                const tmpFile = tmp.fileSync();
+                await pipeline(stream, createWriteStream(tmpFile.name));
+                node = new VirtualContentBuffer(tmpFile);
+            }
+            else
+            {
+                // Small file or unknown size — buffer in memory.
+                const chunks: Buffer[] = [];
+                for await (const chunk of stream) chunks.push(chunk as Buffer);
+                node = new VirtualContentBuffer(undefined, Buffer.concat(chunks));
+            }
+        }
+        finally
+        {
+            this.downloadSemaphore.release();
+        }
+
+        // 6. Cache so repeated reads (e.g. thumbnail then full view) hit memory.
         this.cache.assetFileBuffers.set(asset.id, node);
 
         return node;

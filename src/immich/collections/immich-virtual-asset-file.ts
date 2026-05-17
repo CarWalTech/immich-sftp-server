@@ -10,6 +10,7 @@ import { ImmichAssetUtils } from "../utils/immich-asset-utils";
 import { ALBUM_BROWSER_LINK_FILE_NAME, ALBUM_METADATA_FILE_NAME } from "../utils/immich-metadata-utils";
 import { ImmichAsset } from "../utils/immich-asset-utils";
 import { deleteAssetFromContainer } from "../utils/immich-fs-utils";
+import { ImmichSessionCache } from "../immich-session-cache";
 
 export class ImmichVirtualAssetFile extends VirtualFile
 {
@@ -42,7 +43,18 @@ export class ImmichVirtualAssetFile extends VirtualFile
 
     async event_stat(): Promise<VirtualMetadata>
     {
-        return VirtualMetadata.file_ro(this.name, this.asset.fileSizeInByte, getAssetMtime(this.asset));
+        const settings = this.file_system.getUserSettings();
+
+        // In preview mode the download endpoint returns a compressed thumbnail,
+        // not the original file, so asset.fileSizeInByte is wrong. Report 0 so
+        // clients treat the size as unknown and read to EOF rather than stopping
+        // at the original file size and discarding a "truncated" result.
+        // FSTAT on an open handle is always accurate because it awaits the download.
+        const reportedSize = settings.assetDownloadSource === 'preview'
+            ? 0
+            : this.asset.fileSizeInByte;
+
+        return VirtualMetadata.file_ro(this.name, reportedSize, getAssetMtime(this.asset));
     }
 
     async event_readfile(): Promise<VirtualContentBuffer>
