@@ -5,13 +5,8 @@ import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { PathUtils } from "../../utils/path-utils";
 import { ImmichFileSystem } from "../immich-file-system";
-import { collectTrashedAssets, collectUnsortedAssets, ImmichAlbumBase } from "../utils/immich-api-utils";
 import { ImmichRootDirectory } from "./immich-root-directory";
-import { ImmichAssetUtils } from "../utils/immich-asset-utils";
-import { ALBUM_BROWSER_LINK_FILE_NAME, ALBUM_METADATA_FILE_NAME } from "../utils/immich-metadata-utils";
 import { ImmichVirtualAssetFile } from "./immich-virtual-asset-file";
-import { ImmichAsset } from "../utils/immich-asset-utils";
-import { ImmichAlbumFolder } from "./immich-album-folder";
 import { canRecieveFileFrom, canSendFileTo } from "../utils/immich-fs-utils";
 import { ImmichVirtualDirectory } from "./immich-virtual-directory";
 
@@ -23,7 +18,7 @@ export class ImmichRootUnsortedDirectory extends ImmichVirtualDirectory
     }
     async event_rebuild(): Promise<Map<string, VirtualNode>>
     {
-        var assets = await collectUnsortedAssets(this, new Set());
+        var assets = await this.file_system.getApi().FETCH_AssetsForNonAlbums(this, new Set());
         var asset_files = new Map(assets.map(asset => ([asset.name, asset as VirtualNode])))
         return asset_files;
     }
@@ -75,7 +70,7 @@ export class ImmichRootTrashDirectory extends ImmichVirtualDirectory
     }
     async event_rebuild(): Promise<Map<string, VirtualNode>>
     {
-        var assets = await collectTrashedAssets(this, new Set());
+        var assets = await this.file_system.getApi().FETCH_AssetsForTrash(this, new Set());
         var asset_files = new Map(assets.map(asset => ([asset.name, asset as VirtualNode])))
         return asset_files;
     }

@@ -49,21 +49,20 @@ export class ImmichAlbumMetadataFile extends VirtualFile
     }
     async event_readfile(): Promise<VirtualContentBuffer>
     {
-        await this.file_system.getApi().FETCH_AssetsForAlbum(this.album);
+        await this.file_system.getApi().FETCH_AssetsForAlbum(this.album, this.album_folder);
         return VirtualContentBufferUtils.bufferFromString(buildAlbumMetadataYamlForAlbum(this.album, this.file_system.getCurrentUser(), this.file_system.getUrl()));
     }
     async event_writefile(contents: VirtualContentBuffer): Promise<boolean>
     {
         const album = this.album
         const content = contents.contents()
-        await this.file_system.getApi().FETCH_AssetsForAlbum(album);
+        await this.file_system.getApi().FETCH_AssetsForAlbum(album, this.album_folder);
         await saveAlbumMetadataFileContent({
             album,
             content,
             currentUser: this.file_system.getCurrentUser(),
             baseUrl: this.file_system.getUrl(),
-            immichAPI: this.file_system.getApi(),
-            refreshAlbumAssets: (targetAlbum) => this.file_system.getApi().FETCH_AssetsForAlbum(targetAlbum),
+            immichAPI: this.file_system.getApi()
         });
 
         this.album_folder.refresh()

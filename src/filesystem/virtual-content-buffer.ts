@@ -146,24 +146,6 @@ export class VirtualContentBufferUtils
         return new VirtualContentBuffer(undefined, Buffer.from(content, 'utf8'));
     }
 
-    /** Create a tmp-backed node containing raw binary data */
-    static bufferFromBuffer(buf: Buffer): VirtualContentBuffer
-    {
-        return new VirtualContentBuffer(undefined, Buffer.from(buf));
-    }
-
-    /** Create a node backed by an in-memory buffer */
-    static buffer(buf: Buffer): VirtualContentBuffer
-    {
-        return new VirtualContentBuffer(undefined, buf);
-    }
-
-    /** Create an empty tmp-backed node */
-    static emptyBuffer()
-    {
-        return new VirtualContentBuffer(undefined, Buffer.alloc(0));
-    }
-
     /** Create a tmp-backed node from a readable stream */
     static async bufferFromStream(stream: NodeJS.ReadableStream): Promise<VirtualContentBuffer>
     {

@@ -9,7 +9,7 @@ import { ImmichAlbumsDirectory } from "./immich-albums-directory";
 import { ImmichAlbumLinkFile } from "./immich-album-link";
 import { ImmichRootUnsortedDirectory } from "./immich-root-commons";
 import { config } from "../../config";
-import { getDesecendantAlbums, collectAlbumAssets, ImmichAlbumsDirectoryNode } from "../utils/immich-api-utils";
+import { getDesecendantAlbums, ImmichAlbumsDirectoryNode } from "../utils/immich-api-utils";
 import { ImmichAlbumDirectoryInfo } from '../utils/immich-api-utils';
 import { canRecieveFileFrom, canSendFileTo } from "../utils/immich-fs-utils";
 import { ImmichVirtualDirectory } from "./immich-virtual-directory";
@@ -29,6 +29,11 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
         super(file_system, node.fsName, undefined, parent, { sendFn: canSendFileTo, recieveFn: canRecieveFileFrom, refreshOnMove: true })
         this.node_data = node
         this.albums_root = albums_root
+    }
+
+    needsRefresh()
+    {
+        return true;
     }
 
     public get_album_data()
@@ -110,7 +115,7 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
         }
 
         await this.file_system.memory.push(filename, this.fullpath, contents, album)
-        this.file_system.getCache().invalidateDirectoryPath(this.fullpath);
+        this.file_system.getCache().invalidateAlbumContents([album.id])
         return true;
     }
     async event_stat(): Promise<VirtualMetadata>
@@ -135,7 +140,7 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
     }
     async event_rebuild(): Promise<Map<string, VirtualNode>>
     {
-        const new_result = await this.file_system.getApi().FETCH_VirtualAlbumBranch(this.node_data.path_id)
+        const new_result = await this.file_system.getApi().FETCH_AlbumVirtualBranch(this.node_data.path_id)
         if (!new_result) return new Map();
         else this.node_data = new_result
 
@@ -148,14 +153,12 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
             ])
 
             var reserved_names = Array.from(sub_folders.keys()).concat(Array.from(metadata_files.keys()))
-            var assets = await collectAlbumAssets(this, new Set(reserved_names));
+            var assets = await this.file_system.getApi().FETCH_AssetsForAlbum(this.node_data.album, this, new Set(reserved_names));
             var asset_files = new Map(assets.map(asset => ([asset.name, asset as VirtualNode])))
-            this.file_system.getCache().invalidateDirectoryPath(this.fullpath);
             return new Map([...Array.from(sub_folders.entries()), ...Array.from(metadata_files.entries()), ...Array.from(asset_files.entries())]);
         }
         else
         {
-            this.file_system.getCache().invalidateDirectoryPath(this.fullpath);
             return sub_folders
         }
     }
@@ -166,7 +169,6 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
             const asset = (item as ImmichVirtualAssetFile)
             const album = (this.node_data.album as ImmichAlbumDirectoryInfo)
             await this.file_system.getApi().SERVER_DeleteAssetFromAlbumOnly(album, asset.asset_id)
-            this.file_system.getCache().invalidateDirectoryPath(this.fullpath);
             return true
         }
         else
@@ -181,7 +183,6 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
             const asset = (item as ImmichVirtualAssetFile)
             const album = (this.node_data.album as ImmichAlbumDirectoryInfo)
             await this.file_system.getApi().SERVER_AddAssetToAlbum(album, asset.asset_id)
-            this.file_system.getCache().invalidateDirectoryPath(this.fullpath);
             return true
         }
         else
@@ -191,7 +192,7 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
     }
     refresh()
     {
-        this.file_system.getCache().invalidateDirectoryPath(this.fullpath);
+        this.file_system.getCache().invalidateAlbums();
         super.refresh()
     }
 }

@@ -81,7 +81,6 @@ export interface ImmichApplyMetadataFn
     currentUser: ImmichUser | null;
     baseUrl: string;
     immichAPI: ImmichAPI;
-    refreshAlbumAssets: RefreshAlbumAssetsFn;
 }
 
 // Classes
@@ -371,7 +370,7 @@ export function validateAlbumMetadataDocumentYaml(content: string): AlbumMetadat
 }
 
 // Save Functions
-export async function saveAlbumMetadataFileContent({ album, content, currentUser, baseUrl, immichAPI, refreshAlbumAssets }: ImmichApplyMetadataFn): Promise<void>
+export async function saveAlbumMetadataFileContent({ album, content, currentUser, baseUrl, immichAPI }: ImmichApplyMetadataFn): Promise<void>
 {
     const metadata = validateAlbumMetadataDocumentYaml(content);
     const current = buildAlbumDocument(album, currentUser, baseUrl);
@@ -409,8 +408,6 @@ export async function saveAlbumMetadataFileContent({ album, content, currentUser
     {
         await AlbumMetadataDocumentUtils.updateAlbumSharing(immichAPI.callApi, album, metadata.sharing.sharedUsers);
     }
-
-    await refreshAlbumAssets(album);
 }
 
 

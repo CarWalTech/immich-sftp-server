@@ -13,16 +13,19 @@ import { VirtualContentBufferUtils } from "../../filesystem/virtual-content-buff
 import { buildAlbumBrowserLinkForAlbum } from "../utils/immich-metadata-utils";
 import { ImmichAlbumDirectoryInfo } from '../utils/immich-api-utils';
 import { logger } from "../../logger";
+import { ImmichAlbumFolder } from "./immich-album-folder";
 
 export class ImmichAlbumLinkFile extends VirtualFile
 {
     private album: ImmichAlbumDirectoryInfo
     private file_system: ImmichFileSystem
+    private album_folder: ImmichAlbumFolder
 
-    constructor(album: ImmichAlbumDirectoryInfo, fsName: string, parent: VirtualDirectory, file_system: ImmichFileSystem)
+    constructor(album: ImmichAlbumDirectoryInfo, fsName: string, parent: ImmichAlbumFolder, file_system: ImmichFileSystem)
     {
         super(fsName, undefined, parent)
         this.file_system = file_system
+        this.album_folder = parent
         this.album = album
     }
 
@@ -44,7 +47,7 @@ export class ImmichAlbumLinkFile extends VirtualFile
     }
     async event_readfile(): Promise<VirtualContentBuffer>
     {
-        await this.file_system.getApi().FETCH_AssetsForAlbum(this.album);
+        await this.file_system.getApi().FETCH_AssetsForAlbum(this.album, this.album_folder);
         return VirtualContentBufferUtils.bufferFromString(buildAlbumBrowserLinkForAlbum(this.album, this.file_system.getUrl()));
     }
     async event_writefile(contents: VirtualContentBuffer): Promise<boolean>

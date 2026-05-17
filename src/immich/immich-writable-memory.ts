@@ -2,7 +2,7 @@ import fs from 'fs';
 import tmp from 'tmp';
 import { VirtualMetadata } from '../filesystem/virtual-metadata';
 import { ImmichFileSystem } from "./immich-file-system";
-import { ImmichUploadQueueItem } from "./immich-api";
+import { ImmichUploadItem } from "./immich-api";
 import { ImmichAlbumDirectoryInfo } from './utils/immich-api-utils';
 import path from "path";
 import { logger } from '../logger';
@@ -20,12 +20,12 @@ export class ImmichWritableMemory
         this.immich_fs = immich_fs
     }
 
-    get entries(): ImmichUploadQueueItem[]
+    get entries(): ImmichUploadItem[]
     {
         return this.immich_fs.getApi().QUEUE_List()
     }
 
-    private find(filename: string): { type: "queue" | "tmp", item: MemoryEntry | ImmichUploadQueueItem | undefined } | null
+    private find(filename: string): { type: "queue" | "tmp", item: MemoryEntry | ImmichUploadItem | undefined } | null
     {
         const uploadable = this.entries.find(f => f.longname === filename);
         if (uploadable) return { type: "queue", item: uploadable }
@@ -59,7 +59,7 @@ export class ImmichWritableMemory
         filename = normalizePath(filename);
         full_name = normalizePath(full_name);
 
-        const data: ImmichUploadQueueItem = {
+        const data: ImmichUploadItem = {
             filename: path.basename(full_name),
             longname: full_name,
             node: tmpFile,
@@ -184,7 +184,7 @@ export class ImmichWritableMemory
 
         if (entry.type === "queue")
         {
-            this.immich_fs.getApi().QUEUE_RenameFileInFlight((entry.item as ImmichUploadQueueItem).longname, newName)
+            this.immich_fs.getApi().QUEUE_RenameFileInFlight((entry.item as ImmichUploadItem).longname, newName)
             return true;
         }
         else if (entry.type === "tmp")

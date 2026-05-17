@@ -7,6 +7,7 @@ import { ImmichAPI } from "../immich-api";
 import { ImmichAsset, ImmichAssetUtils } from "./immich-asset-utils";
 import { logger } from "../../logger";
 import { ImmichTagFolder } from "../collections/immich-tag-folder";
+import { VirtualDirectory } from "../../filesystem/virtual-directory";
 
 export interface ImmichAlbumUser
 {
@@ -105,172 +106,6 @@ export function isCurrentUserAlbumOwner(album: ImmichAlbumBase, currentUser: Imm
     return ownerCandidates.some(ownerCandidate => currentCandidates.includes(ownerCandidate));
 }
 
-// Collectors
-function buildUniqueName(base: string, reserved: Set<string>, nameCount: Map<string, number>): string
-{
-    // Reserved → force collision immediately
-    if (reserved.has(base))
-    {
-        const count = nameCount.get(base) ?? 0;
-        nameCount.set(base, count + 1);
-        return `${base} (${count + 1})`;
-    }
-
-    // Normal collision logic
-    let finalName = base;
-    let count = nameCount.get(finalName) ?? 0;
-
-    if (count > 0)
-    {
-        do
-        {
-            count++;
-            finalName = `${base} (${count})`;
-        } while (reserved.has(finalName));
-    }
-
-    nameCount.set(base, count + 1);
-    return finalName;
-}
-
-export async function collectAlbumAssets(album_folder: ImmichAlbumFolder, reserved_names: Set<string>): Promise<ImmichVirtualAssetFile[]>
-{
-    const node_data = album_folder.get_album_data();
-    if (!node_data.album) return [];
-
-    const album = node_data.album;
-    const albumId = album.id;
-
-    // 1. Check cache
-    const cached = album_folder.file_system.getCache().albumAssetListings.get(albumId);
-    if (cached) return cached;
-
-    // 2. Ensure album assets are loaded (cachedFetch handles this)
-    await album_folder.file_system.getApi().FETCH_AssetsForAlbum(album);
-
-    const assets = album.assets ?? [];
-    const files = new Array<ImmichVirtualAssetFile>(assets.length);
-    const nameCount = new Map<string, number>();
-
-    for (let i = 0; i < assets.length; i++)
-    {
-        const asset = assets[i];
-        const finalName = buildUniqueName(ImmichAssetUtils.buildPreferredAssetName(asset), reserved_names, nameCount);
-
-        files[i] = new ImmichVirtualAssetFile(
-            asset,
-            finalName,
-            album_folder,
-            album_folder.file_system
-        );
-    }
-
-    // 3. Store in cache
-    album_folder.file_system.getCache().albumAssetListings.set(albumId, files);
-
-    return files;
-}
-export async function collectUnsortedAssets(source_folder: ImmichVirtualDirectory, reserved_names: Set<string>): Promise<ImmichVirtualAssetFile[]>
-{
-    const cacheKey = "__unsorted_assets__";
-
-    // 1. Check cache
-    const cached = source_folder.file_system.getCache().albumAssetListings.get(cacheKey);
-    if (cached) return cached;
-
-    // 2. Fetch (cachedFetch handles metadata)
-    const assets = await source_folder.file_system.getApi().FETCH_AssetsForNonAlbums();
-
-    const files = new Array<ImmichVirtualAssetFile>(assets.length);
-    const nameCount = new Map<string, number>();
-
-    for (let i = 0; i < assets.length; i++)
-    {
-        const asset = assets[i];
-        const finalName = buildUniqueName(ImmichAssetUtils.buildPreferredAssetName(asset), reserved_names, nameCount);
-
-        files[i] = new ImmichVirtualAssetFile(
-            asset,
-            finalName,
-            source_folder,
-            source_folder.file_system
-        );
-    }
-
-    // 3. Store in cache
-    source_folder.file_system.getCache().albumAssetListings.set(cacheKey, files);
-
-    return files;
-}
-export async function collectTrashedAssets(source_folder: ImmichVirtualDirectory, reserved_names: Set<string>): Promise<ImmichVirtualAssetFile[]>
-{
-    const cacheKey = "__trashed_assets__";
-
-    // 1. Check cache
-    const cached = source_folder.file_system.getCache().albumAssetListings.get(cacheKey);
-    if (cached) return cached;
-
-    // 2. Fetch (cachedFetch handles metadata)
-    const assets = await source_folder.file_system.getApi().FETCH_AssetsForTrash();
-
-    const files = new Array<ImmichVirtualAssetFile>(assets.length);
-    const nameCount = new Map<string, number>();
-
-    for (let i = 0; i < assets.length; i++)
-    {
-        const asset = assets[i];
-        const finalName = buildUniqueName(ImmichAssetUtils.buildPreferredAssetName(asset), reserved_names, nameCount);
-
-        files[i] = new ImmichVirtualAssetFile(
-            asset,
-            finalName,
-            source_folder,
-            source_folder.file_system
-        );
-    }
-
-    // 3. Store in cache
-    source_folder.file_system.getCache().albumAssetListings.set(cacheKey, files);
-
-    return files;
-}
-export async function collectTaggedAssets(source: ImmichTagFolder, reserved_names: Set<string>): Promise<ImmichVirtualAssetFile[]>
-{
-
-    if (!source.node_data.tag) return [];
-
-    const tag = source.node_data.tag;
-    const cacheKey = `tag_assets_${tag.id}`;
-
-    // 1. Check cache
-    const cached = source.file_system.getCache().albumAssetListings.get(cacheKey);
-    if (cached) return cached;
-
-    // 2. Fetch (cachedFetch handles metadata)
-    await source.file_system.getApi().FETCH_AssetsForTag(tag);
-
-    const assets = tag.assets ?? [];
-    const files = new Array<ImmichVirtualAssetFile>(assets.length);
-    const nameCount = new Map<string, number>();
-
-    for (let i = 0; i < assets.length; i++)
-    {
-        const asset = assets[i];
-        const finalName = buildUniqueName(ImmichAssetUtils.buildPreferredAssetName(asset), reserved_names, nameCount);
-
-        files[i] = new ImmichVirtualAssetFile(
-            asset,
-            finalName,
-            source,
-            source.file_system
-        );
-    }
-
-    // 3. Store in cache
-    source.file_system.getCache().albumAssetListings.set(cacheKey, files);
-
-    return files;
-}
 
 
 // Getters
@@ -325,7 +160,7 @@ export function getVirtualAlbumTree(albums: ImmichAlbumDirectoryInfo[]): ImmichA
 
     return root;
 }
-export function getAlbumMtime(album: Pick<ImmichAlbumBase, 'id' | 'albumName' | 'createdAt' | 'updatedAt'>): number
+export function getAlbumMtime(album: ImmichAlbumBase): number
 {
     const updatedTimestamp = album.updatedAt ? new Date(album.updatedAt).getTime() : NaN;
     if (Number.isFinite(updatedTimestamp) && updatedTimestamp > 0)
@@ -342,7 +177,7 @@ export function getAlbumMtime(album: Pick<ImmichAlbumBase, 'id' | 'albumName' | 
     logger.warn('ImmichAlbumUtils', 'getAlbumMtime', 'warn', `Album '${album.albumName}' (ID: ${album.id}) has missing/invalid createdAt and updatedAt timestamps, using current time as mtime fallback.`);
     return Math.floor(Date.now() / 1000);
 }
-export function getTagMtime(album: Pick<ImmichTag, 'id' | 'value' | 'createdAt' | 'updatedAt'>): number
+export function getTagMtime(album: ImmichTag): number
 {
     const updatedTimestamp = album.updatedAt ? new Date(album.updatedAt).getTime() : NaN;
     if (Number.isFinite(updatedTimestamp) && updatedTimestamp > 0)
@@ -399,6 +234,22 @@ export function getVirtualTagTree(tags: ImmichTag[]): ImmichTagsDirectoryNode
     }
 
     return root;
+}
+export function getAssetMtime(asset: ImmichAsset): number
+{
+    // Prefer Immich server-maintained timestamps first, then fall back to uploaded file timestamps.
+    const candidates = [asset.updatedAt, asset.createdAt, asset.fileModifiedAt, asset.fileCreatedAt];
+    for (const value of candidates)
+    {
+        const timestamp = value ? new Date(value).getTime() : NaN;
+        if (Number.isFinite(timestamp) && timestamp > 0)
+        {
+            return Math.floor(timestamp / 1000);
+        }
+    }
+
+    logger.warn('ImmichAssetUtils', 'getAssetMtime', `Asset '${asset.originalFileName}' (ID: ${asset.id}) has missing/invalid timestamps, using current time fallback.`);
+    return Math.floor(Date.now() / 1000);
 }
 
 // Mapping
@@ -465,6 +316,66 @@ export function mapAlbumFromApi(item: ImmichAlbumApiResponse): ImmichAlbumBase
         updatedAt: item.updatedAt ? String(item.updatedAt) : undefined,
         albumUsers: mapAlbumUsers(item.albumUsers),
     };
+}
+export function mapAssetFromApi(asset: any): ImmichAsset
+{
+    if (!asset.exifInfo?.fileSizeInByte)
+    {
+        logger.warn('ImmichAssetUtils', 'getAssetMtime', `Asset ${asset.originalFileName} (${asset.id}) has no exifInfo.fileSizeInByte, using 0 as fallback.`);
+    }
+    return {
+        id: asset.id,
+        originalFileName: asset.originalFileName,
+        createdAt: asset.createdAt,
+        updatedAt: asset.updatedAt,
+        originalPath: asset.originalPath,
+        fileCreatedAt: asset.fileCreatedAt,
+        fileModifiedAt: asset.fileModifiedAt,
+        fileSizeInByte: asset.exifInfo?.fileSizeInByte ?? 0,
+        isTrashed: asset.isTrashed
+    };
+}
+export function mapFilesFromAssets(assets: ImmichAsset[], parent: ImmichVirtualDirectory, reserved_names?: Set<string>): ImmichVirtualAssetFile[]
+{
+    function buildUniqueName(base: string, reserved: Set<string>, nameCount: Map<string, number>): string
+    {
+        // Reserved → force collision immediately
+        if (reserved.has(base))
+        {
+            const count = nameCount.get(base) ?? 0;
+            nameCount.set(base, count + 1);
+            return `${base} (${count + 1})`;
+        }
+
+        // Normal collision logic
+        let finalName = base;
+        let count = nameCount.get(finalName) ?? 0;
+
+        if (count > 0)
+        {
+            do
+            {
+                count++;
+                finalName = `${base} (${count})`;
+            } while (reserved.has(finalName));
+        }
+
+        nameCount.set(base, count + 1);
+        return finalName;
+    }
+
+    const files = new Array<ImmichVirtualAssetFile>(assets.length);
+    const reservedNames = reserved_names ?? new Set<string>();
+    const nameCount = new Map<string, number>();
+
+    for (let i = 0; i < assets.length; i++)
+    {
+        const asset = assets[i];
+        const finalName = buildUniqueName(parent.file_system.getApi().getAssetDisplayName(asset), reservedNames, nameCount);
+        files[i] = new ImmichVirtualAssetFile(asset, finalName, parent, parent.file_system);
+    }
+
+    return files;
 }
 
 // Searching

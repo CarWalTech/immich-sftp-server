@@ -29,11 +29,9 @@ export class ImmichAlbumsDirectory extends ImmichVirtualDirectory
     }
     async event_rebuild(): Promise<Map<string, VirtualNode>>
     {
-        const current_file_tree = await this.file_system.getApi().FETCH_VirtualAlbumTree();
-        if (current_file_tree == null)
-            return new Map()
-        else
-            return new Map([...current_file_tree.children.values()].map(node => ([node.fsName, new ImmichAlbumFolder(this.file_system, this, this, node)])))
+        const current_file_tree = await this.file_system.getApi().FETCH_AlbumVirtualTree();
+        if (!current_file_tree) return new Map()
+        return new Map([...current_file_tree.children.values()].map(node => ([node.fsName, new ImmichAlbumFolder(this.file_system, this, this, node)])))
     }
 }
 
