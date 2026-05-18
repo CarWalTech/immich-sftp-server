@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import YAML from 'yaml';
-import { getEnvBoolean, getEnvNumber, getEnvOrDefault, getOptionalEnv, getOptionalEnvNumber, requireEnv } from './utils/env-utils';
+import { getEnvBoolean, getEnvByteSize, getEnvNumber, getEnvOrDefault, getOptionalEnv, getOptionalEnvNumber, requireEnv } from './utils/env-utils';
 import { logger } from './logger';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -45,6 +45,7 @@ export class Config
   readBatchSize: number
   localFilesMode: boolean
   maxConcurrentDownloads: number
+  downloadBufferThreshold: number
 
 
   constructor()
@@ -87,6 +88,7 @@ export class Config
     this.readBatchSize = getEnvNumber('READ_BATCH_SIZE', 50);
     this.localFilesMode = getEnvBoolean('LOCAL_FILES_MODE', false);
     this.maxConcurrentDownloads = getEnvNumber('MAX_CONCURRENT_DOWNLOADS', 6);
+    this.downloadBufferThreshold = getEnvByteSize('DOWNLOAD_BUFFER_THRESHOLD', '4MB')
   }
 };
 

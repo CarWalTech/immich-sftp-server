@@ -1,5 +1,6 @@
 import { ImmichVirtualAssetFile } from "./collections/immich-virtual-asset-file";
 import { ImmichAlbumDirectoryInfo, ImmichAlbumsDirectoryNode, ImmichUser } from "./utils/immich-api-utils";
+import { ImmichAsset } from "./utils/immich-asset-utils";
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
 
 export interface ImmichCachedEntry<T>
@@ -20,7 +21,12 @@ export interface ImmichCacheInvalidationOptions
 export interface ImmichAssetCacheFetchArgs
 {
     fetchMeta?: () => Promise<{ updatedAt?: string; checksum?: string }>;
-    fetchData: () => Promise<ImmichVirtualAssetFile[]>;
+    fetchData: () => Promise<ImmichAsset[]>;
+    // Called per-connection to produce fresh file nodes bound to the caller's
+    // file system. The raw ImmichAsset[] are shared/cached across connections;
+    // the VirtualFile wrappers are rebuilt each time so they never embed a
+    // stale connection reference.
+    buildFiles: (assets: ImmichAsset[]) => ImmichVirtualAssetFile[];
 }
 
 export interface ImmichTreeCacheFetchArgs
@@ -35,13 +41,14 @@ export class ImmichSessionCache
     assetFileSizes: Map<string, number>;
     assetFileBuffers: Map<string, VirtualContentBuffer>;
 
-    assetTree: Map<string, ImmichCachedEntry<ImmichVirtualAssetFile[]>>;
+    // Stores raw asset data — no connection-specific references.
+    assetTree: Map<string, ImmichCachedEntry<ImmichAsset[]>>;
     albumsTree: Map<string, ImmichCachedEntry<ImmichAlbumsDirectoryNode | undefined>>;
 
     // Deduplication maps: when multiple connections request the same directory
     // simultaneously (e.g. Dolphin thumbnail workers), they all share one in-flight
     // fetch rather than each issuing their own redundant API calls.
-    private inFlightListFetches: Map<string, Promise<ImmichVirtualAssetFile[]>> = new Map();
+    private inFlightListFetches: Map<string, Promise<ImmichAsset[]>> = new Map();
     private inFlightTreeFetches: Map<string, Promise<ImmichAlbumsDirectoryNode | undefined>> = new Map();
 
     private static _instances: Map<string, ImmichSessionCache> = new Map();
@@ -69,46 +76,53 @@ export class ImmichSessionCache
         return instance;
     }
 
-    public async fetchedCachedAssetLists(cacheKey: string, { fetchMeta, fetchData }: ImmichAssetCacheFetchArgs): Promise<ImmichVirtualAssetFile[]>
+    public async fetchedCachedAssetLists(cacheKey: string, { fetchMeta, fetchData, buildFiles }: ImmichAssetCacheFetchArgs): Promise<ImmichVirtualAssetFile[]>
     {
-        // If another connection is already fetching this directory, join that
-        // promise rather than firing a redundant parallel API call.
-        const inflight = this.inFlightListFetches.get(cacheKey);
-        if (inflight) return inflight;
+        // Deduplicate concurrent fetches so all connections share one in-flight
+        // API request. The promise resolves to raw ImmichAsset[] (no connection
+        // references), then each caller runs buildFiles() independently.
+        let assetPromise = this.inFlightListFetches.get(cacheKey);
 
-        const promise = (async () =>
+        if (!assetPromise)
         {
-            const cached = this.assetTree.get(cacheKey);
-
-            // No validator: trust the cached data until an explicit invalidation.
-            if (cached && !fetchMeta) return cached.data;
-
-            if (fetchMeta)
+            assetPromise = (async () =>
             {
-                let freshMeta: { updatedAt?: string; checksum?: string } | undefined;
-                try { freshMeta = await fetchMeta(); } catch (_) { }
+                const cached = this.assetTree.get(cacheKey);
 
-                // Cache hit: API timestamp matches what we stored.
-                if (cached && freshMeta?.updatedAt && freshMeta.updatedAt === cached.updatedAt)
-                    return cached.data;
+                // No validator: trust the cached data until an explicit invalidation.
+                if (cached && !fetchMeta) return cached.data;
 
-                // Cache stale or missing — fetch data and store with the API timestamp.
+                if (fetchMeta)
+                {
+                    let freshMeta: { updatedAt?: string; checksum?: string } | undefined;
+                    try { freshMeta = await fetchMeta(); } catch (_) { }
+
+                    // Cache hit: API timestamp matches what we stored.
+                    if (cached && freshMeta?.updatedAt && freshMeta.updatedAt === cached.updatedAt)
+                        return cached.data;
+
+                    // Cache stale or missing — fetch and store with the API timestamp.
+                    const data = await fetchData();
+                    const updatedAt = freshMeta?.updatedAt ?? Date.now().toString();
+                    this.assetTree.set(cacheKey, { data, updatedAt });
+                    return data;
+                }
+
+                // No cached entry and no validator.
                 const data = await fetchData();
-                const updatedAt = freshMeta?.updatedAt ?? Date.now().toString();
-                this.assetTree.set(cacheKey, { data, updatedAt });
+                this.assetTree.set(cacheKey, { data, updatedAt: Date.now().toString() });
                 return data;
-            }
+            })();
 
-            // No cached entry and no validator.
-            const data = await fetchData();
-            this.assetTree.set(cacheKey, { data, updatedAt: Date.now().toString() });
-            return data;
-        })();
+            this.inFlightListFetches.set(cacheKey, assetPromise);
+            assetPromise.finally(() => this.inFlightListFetches.delete(cacheKey));
+        }
 
-        this.inFlightListFetches.set(cacheKey, promise);
-        promise.finally(() => this.inFlightListFetches.delete(cacheKey));
-        return promise;
+        // Build fresh file nodes for this connection from the shared raw assets.
+        const assets = await assetPromise;
+        return buildFiles(assets);
     }
+
     public async fetchCachedAlbumTree(cacheKey: string, { fetchMeta, fetchData }: ImmichTreeCacheFetchArgs): Promise<ImmichAlbumsDirectoryNode | undefined>
     {
         const inflight = this.inFlightTreeFetches.get(cacheKey);

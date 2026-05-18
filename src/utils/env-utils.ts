@@ -50,6 +50,35 @@ export function getEnvBoolean(name: string, defaultValue: boolean): boolean
     throw new Error(`Invalid boolean environment variable ${name}: ${val}`);
 }
 
+export function getEnvByteSize(name: string, defaultValue: string): number
+{
+    const input = process.env[name] ?? defaultValue;
+    if (!input) return 0;
+
+    const trimmed = input.trim().toUpperCase();
+
+    const match = trimmed.match(/^(\d+(?:\.\d+)?)(B|KB|MB|GB|TB)?$/);
+    if (!match)
+    {
+        throw new Error(`Invalid byte size format: "${input}"`);
+    }
+
+    const value = parseFloat(match[1]);
+    const unit = match[2] ?? "B";
+
+    const multipliers: Record<string, number> = {
+        B: 1,
+        KB: 1024,
+        MB: 1024 ** 2,
+        GB: 1024 ** 3,
+        TB: 1024 ** 4,
+    };
+
+    return Math.floor(value * multipliers[unit]);
+
+}
+
+
 export function getEnvNumber(name: string, defaultValue: number): number
 {
     const val = process.env[name];
