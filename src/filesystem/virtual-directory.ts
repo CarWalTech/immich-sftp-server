@@ -43,6 +43,19 @@ export class VirtualDirectory extends VirtualNode
         const map = await this.nodes_map();
         return map.get(name);
     }
+
+    /**
+     * Synchronous cache probe — avoids async overhead when the directory is
+     * already built. Returns `{ hit: false }` if the cache is absent or stale
+     * (caller must fall back to the async path). Returns `{ hit: true, node }`
+     * if the cache is valid; `node` may be `undefined` meaning "not found."
+     */
+    tryNodeFromCache(name: string): { hit: false } | { hit: true; node: VirtualNode | undefined }
+    {
+        if (this._child_nodes === null || this._force_child_node_refresh || this.needsRefresh())
+            return { hit: false };
+        return { hit: true, node: this._child_nodes.get(name) };
+    }
     async nodes(refresh?: boolean)
     {
         const results = await this.nodes_map(refresh);

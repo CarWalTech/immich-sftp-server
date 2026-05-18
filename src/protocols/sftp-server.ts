@@ -480,12 +480,13 @@ async function SFTP_STAT(self: SftpConnectionInstance, reqid: number, filePath: 
       return self.sftpStream.attrs(reqid, createFolderAttributes());
     }
 
-    const stat = await self.fsBackend.stat(normalized);
-    if (!stat)
+    const stat_response = await self.fsBackend.stat(normalized);
+    if (!stat_response.success || !stat_response.contents)
     {
-      logger.info('SFTP', mode, `RESPOND NO_SUCH_FILE reqid=${reqid}`);
+      //logger.info('SFTP', mode, `RESPOND NO_SUCH_FILE reqid=${reqid}`);
       return self.sftpStream.status(reqid, SFTP_STATUS_CODE.NO_SUCH_FILE);
     }
+    const stat = stat_response.contents;
 
     self.sftpStream.attrs(reqid, {
       mode: stat.mode,
@@ -493,7 +494,7 @@ async function SFTP_STAT(self: SftpConnectionInstance, reqid: number, filePath: 
       gid: stat.gid,
       size: stat.size,
       mtime: stat.mtime,
-      atime: stat.mtime
+      atime: stat.atime
     });
   } catch (e)
   {
@@ -541,10 +542,10 @@ async function SFTP_FSTAT(self: SftpConnectionInstance, reqid: number, handle: B
       // fallback also fails), fall through to awaiting the actual download so we
       // always return an accurate byte count rather than zero.
       const stat = await self.fsBackend.stat(entry.path).catch(() => null);
-      if (stat && stat.size > 0)
+      if (stat && stat.contents && stat.contents.size > 0)
       {
         logger.info('SFTP', 'FSTAT', `RESPOND still-downloading ${entry.path} reqid=${reqid}`);
-        return self.sftpStream.attrs(reqid, createFileAttributes(stat.size));
+        return self.sftpStream.attrs(reqid, createFileAttributes(stat.contents.size));
       }
 
       // Size unknown — wait for the download so the response is always accurate.

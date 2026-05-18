@@ -1,4 +1,4 @@
-import { VirtualFileSystem } from "../filesystem/virtual-file-system";
+import { VFSResponse, VirtualFileSystem } from "../filesystem/virtual-file-system";
 import { config, UserDisplaySettings } from '../config';
 import tmp from 'tmp';
 import { ImmichAPI } from "./immich-api";
@@ -15,6 +15,7 @@ import { PathUtils } from "../utils/path-utils";
 import { VirtualNode } from "../filesystem/virtual-node";
 import { ImmichVirtualAssetFile } from "./collections/immich-virtual-asset-file";
 import { dirname } from "path";
+import { VirtualMetadata } from "../filesystem/virtual-metadata";
 
 
 export class ImmichFileSystem implements VirtualFileSystem
@@ -93,14 +94,16 @@ export class ImmichFileSystem implements VirtualFileSystem
 
         throw new Error("Cannot write to destination");
     }
-    async stat(filename: string)
+    async stat(filename: string): Promise<VFSResponse<VirtualMetadata>>
     {
         const tmp_result = await this.memory.stat(filename)
-        if (tmp_result) return tmp_result;
+        if (tmp_result) return { success: true, contents: tmp_result };
 
         const { node } = await VirtualFsUtils.resolvePath(this.root, filename);
-        if (!node) throw new Error(`File not found: ${filename}`);
-        return await node.event_stat();
+        if (!node) return { success: false, contents: undefined }
+
+        const node_result = await node.event_stat();
+        return { success: true, contents: node_result }
     }
     async rename(oldFileName: string, newFileName: string)
     {

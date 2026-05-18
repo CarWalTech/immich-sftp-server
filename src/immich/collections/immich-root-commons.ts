@@ -76,7 +76,7 @@ export class ImmichRootTrashDirectory extends ImmichVirtualDirectory
     }
     async event_stat(): Promise<VirtualMetadata>
     {
-        return VirtualMetadata.directory_rw(this.name, Math.floor(Date.now() / 1000))
+        return VirtualMetadata.directory_rw(this.name)
     }
     async event_mkdir(filename: string): Promise<boolean>
     {

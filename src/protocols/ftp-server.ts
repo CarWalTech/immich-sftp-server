@@ -94,12 +94,12 @@ class ImmichFtpFileSystem extends FileSystem
     }
 
     const stat = await this.fsBackend.stat(resolvedPath);
-    if (!stat)
+    if (!stat || !stat.contents)
     {
       throw new GeneralError(`No such file or directory: ${fileName}`, 550);
     }
 
-    return this.toStat(path.posix.basename(resolvedPath), stat.isDir, stat.size, stat.mtime);
+    return this.toStat(path.posix.basename(resolvedPath), stat.contents.isDir, stat.contents.size, stat.contents.mtime);
   }
 
   override async list(requestPath = '.'): Promise<FtpStat[]>
@@ -115,7 +115,7 @@ class ImmichFtpFileSystem extends FileSystem
     if (resolvedPath !== '/')
     {
       const stat = await this.fsBackend.stat(resolvedPath);
-      if (!stat || !stat.isDir)
+      if (!stat || (stat.contents && !stat.contents.isDir))
       {
         throw new GeneralError(`Not a valid directory: ${requestPath}`, 550);
       }

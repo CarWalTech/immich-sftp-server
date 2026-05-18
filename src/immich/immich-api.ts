@@ -186,9 +186,10 @@ export class ImmichAPI
     {
         return this.userSettings
     }
-    public getAssetDisplayName(asset: ImmichAsset): string
+    public getAssetDisplayName(asset: ImmichAsset): [string, string]
     {
         const extension = path.extname(asset.originalFileName);
+        const originalFileName = asset.originalFileName.slice(0, -(extension.length));
         const timestamp = getAssetMtime(asset);
         const dt = DateTime.fromSeconds(timestamp, { zone: config.TZ });
         const formattedTimestamp = `${dt.toFormat('yyyyLLdd_HHmmss')}${String(dt.millisecond).padStart(3, '0')}`;
@@ -197,16 +198,16 @@ export class ImmichAPI
         switch (this.userSettings.assetFileNamePattern)
         {
             case 'assetUuid':
-                return `${asset.id}${extension}`;
+                return [`${asset.id}`, extension];
             case 'shortUuid':
-                return `img_${shortId}${extension}`;
+                return [`img_${shortId}`, extension];
             case 'date':
-                return `${formattedTimestamp}${extension}`;
+                return [`${formattedTimestamp}`, extension];
             case 'dateUuid':
-                return `${formattedTimestamp}_${shortId}${extension}`;
+                return [`${formattedTimestamp}_${shortId}`, extension];
             case 'original':
             default:
-                return asset.originalFileName;
+                return [originalFileName, extension];
         }
     }
     public async getUserDisplaySettings()
@@ -451,6 +452,10 @@ export class ImmichAPI
                 const archived_items = await this.FETCH_AssetsByMetadata({ isNotInAlbum: true, visibility: "archive" })
                 return [...normal_items, ...archived_items];
             },
+            fetchMeta: async () =>
+            {
+                return { updatedAt: DateTime.now().toJSDate().toISOString() }
+            },
             buildFiles: (assets) => mapFilesFromAssets(assets, parent, reserved_names)
         });
     }
@@ -464,6 +469,10 @@ export class ImmichAPI
                 const normal_items = await this.FETCH_AssetsByMetadata({ trashedBefore: DateTime.now().toJSDate().toISOString() })
                 const archived_items = await this.FETCH_AssetsByMetadata({ trashedBefore: DateTime.now().toJSDate().toISOString(), visibility: "archive" })
                 return [...normal_items, ...archived_items];
+            },
+            fetchMeta: async () =>
+            {
+                return { updatedAt: DateTime.now().toJSDate().toISOString() }
             },
             buildFiles: (assets) => mapFilesFromAssets(assets, parent, reserved_names)
         });
@@ -630,67 +639,82 @@ export class ImmichAPI
 
         logger.info(`ImmichAPI`, 'QUEUE', `Uploading: ${filename}`);
 
-        // Use the pre-computed SHA-1 set by the SFTP write path (incremental, no re-read).
-        // Fall back to a full read for FTP/WebDAV uploads where no checksum was pre-computed.
-        let checksum: string;
-        if (node.checksum)
+        try
         {
-            checksum = node.checksum;
-            logger.info(`ImmichAPI`, 'QUEUE', `Using pre-computed checksum for '${filename}'`);
-        }
-        else
-        {
-            const hash = crypto.createHash('sha1');
-            if (node.isTmp)
-                await pipeline(fs.createReadStream(node.name), hash);
-            else
-                hash.update(node.buffer!);
-            checksum = hash.digest('base64');
-        }
-
-        // Bulk check
-        const bulkCheckResponse = await this.SERVER_ValidateUpload(checksum, filename);
-        const result = bulkCheckResponse.results[0];
-        const action = result.action;
-        let assetId = result.assetId;
-
-        logger.info(`ImmichAPI`, 'QUEUE', `Bulk check result for '${filename}': action=${action}`);
-
-        if (action === "accept")
-        {
-            const data = new FormData();
-            const iso = DateTime.fromSeconds(mtime, { zone: config.TZ }).toJSDate().toISOString();
-
-            data.append('fileModifiedAt', iso);
-            data.append('fileCreatedAt', iso);
-            data.append('deviceAssetId', filename);
-            data.append('deviceId', 'immich-network-storage');
-
-            // Stream from VirtualNodeBuffer
-            const readStream = node.createReadStream();
-            data.append('assetData', readStream, { filename });
-
-            const uploadResponse = await this.SERVER_UploadAsset(data);
-            node.removeCallback(); // cleanup tmp or noop for buffer
-
-            assetId = uploadResponse.id;
-        }
-
-        // Restore if trashed
-        if (action === "reject" && result.isTrashed)
-        {
-            if (fileEntry.removeFromOtherAlbums)
+            // Use the pre-computed SHA-1 set by the SFTP write path (incremental, no re-read).
+            // Fall back to a full read for FTP/WebDAV uploads where no checksum was pre-computed.
+            let checksum: string;
+            if (node.checksum)
             {
-                const assigned = await this.FETCH_AlbumsForAssetId(assetId);
-                for (const album of assigned)
-                    await this.SERVER_DeleteAssetFromAlbumOnly(album, assetId);
+                checksum = node.checksum;
+                logger.info(`ImmichAPI`, 'QUEUE', `Using pre-computed checksum for '${filename}'`);
             }
-            await this.SERVER_RestoreAsset(assetId);
-        }
+            else
+            {
+                const hash = crypto.createHash('sha1');
+                if (node.isTmp)
+                    await pipeline(fs.createReadStream(node.name), hash);
+                else
+                    hash.update(node.buffer!);
+                checksum = hash.digest('base64');
+            }
 
-        // Add to album
-        if (fileEntry.uploadToAlbum)
-            await this.SERVER_AddAssetToAlbum(fileEntry.uploadToAlbum, assetId);
+            let action = "reject";
+            let isTrashed = false;
+            let assetId: string | undefined;
+
+            if (config.validateUploads)
+            {
+                const bulkCheckResponse = await this.SERVER_ValidateUpload(checksum, filename);
+                const result = bulkCheckResponse.results[0];
+                const reason = result.reason;
+                assetId = result.assetId;
+                action = result.action;
+                isTrashed = !!result.isTrashed;
+                logger.info(`ImmichAPI`, 'QUEUE', `Bulk check for '${filename}': action=${action}; reason=${reason}; assetId=${assetId}`);
+            }
+            else
+            {
+                action = "accept";
+            }
+
+            if (action === "accept")
+            {
+                const data = new FormData();
+                const iso = DateTime.fromSeconds(mtime, { zone: config.TZ }).toJSDate().toISOString();
+
+                data.append('fileModifiedAt', iso);
+                data.append('fileCreatedAt', iso);
+                data.append('deviceAssetId', filename);
+                data.append('deviceId', 'immich-network-storage');
+
+                const readStream = node.createReadStream();
+                data.append('assetData', readStream, { filename });
+
+                const uploadResponse = await this.SERVER_UploadAsset(data);
+                assetId = uploadResponse.id;
+            }
+
+            // Restore if trashed
+            if (action === "reject" && isTrashed && assetId)
+            {
+                if (fileEntry.removeFromOtherAlbums)
+                {
+                    const assigned = await this.FETCH_AlbumsForAssetId(assetId);
+                    for (const album of assigned)
+                        await this.SERVER_DeleteAssetFromAlbumOnly(album, assetId);
+                }
+                await this.SERVER_RestoreAsset(assetId);
+            }
+
+            // Add to album
+            if (fileEntry.uploadToAlbum && assetId)
+                await this.SERVER_AddAssetToAlbum(fileEntry.uploadToAlbum.id, assetId);
+        }
+        finally
+        {
+            node.removeCallback();
+        }
     }
     // #endregion
 
@@ -748,9 +772,9 @@ export class ImmichAPI
 
         this.cache.invalidateAlbumContents([album.id]);
     }
-    async SERVER_CreateAlbum(albumName: string, parent?: ImmichAlbumDirectoryInfo)
+    async SERVER_CreateAlbum(albumName: string): Promise<string>
     {
-        await this.callApi({
+        const response = await this.callApi({
             method: 'POST',
             endpoint: 'albums',
             data: JSON.stringify({ albumName }),
@@ -758,17 +782,18 @@ export class ImmichAPI
         });
 
         this.cache.invalidateAlbums()
+        return String(response.id)
     }
-    async SERVER_AddAssetToAlbum(album: ImmichAlbumDirectoryInfo, assetId: any)
+    async SERVER_AddAssetToAlbum(album_id: string, assetId: any)
     {
         await this.callApi({
             method: 'PUT',
-            endpoint: `albums/${album.id}/assets`,
+            endpoint: `albums/${album_id}/assets`,
             data: JSON.stringify({ ids: [assetId] }),
             logAction: 'Add asset to album'
         });
 
-        this.cache.invalidateAlbumContents([album.id]);
+        this.cache.invalidateAlbumContents([album_id]);
     }
     async SERVER_AddAssetToUnsorted(assetId: any)
     {

@@ -4,7 +4,6 @@ import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { ImmichFileSystem } from "../immich-file-system";
 import { ImmichAlbumsDirectory } from "./immich-albums-directory";
-import { ImmichTagsDirectory } from "./immich-tags-directory";
 import { ImmichRootTrashDirectory, ImmichRootUnsortedDirectory } from "./immich-root-commons";
 import { logger } from "../../logger";
 import { ImmichRootMetadataFile } from "./immich-root-metadata";
@@ -14,7 +13,6 @@ export class ImmichRootDirectory extends VirtualDirectory
     private file_system: ImmichFileSystem;
 
     private dir_albums: ImmichAlbumsDirectory;
-    private dir_tags: ImmichTagsDirectory;
     private dir_trash: ImmichRootTrashDirectory;
     private dir_unsorted: ImmichRootUnsortedDirectory;
 
@@ -26,7 +24,6 @@ export class ImmichRootDirectory extends VirtualDirectory
         this.file_system = file_system
 
         this.dir_albums = new ImmichAlbumsDirectory(this.file_system, this);
-        this.dir_tags = new ImmichTagsDirectory(this.file_system, this);
         this.dir_unsorted = new ImmichRootUnsortedDirectory(this.file_system, this);
         this.dir_trash = new ImmichRootTrashDirectory(this.file_system, this);
 
@@ -37,8 +34,6 @@ export class ImmichRootDirectory extends VirtualDirectory
     {
         const visibility = await this.file_system.getUserDisplaySettings();
         let rootEntries = await super.event_list()
-
-        if (!visibility.tagsEnabled) rootEntries = rootEntries.filter(x => x.name != this.dir_tags.name)
         return rootEntries;
     }
 
@@ -69,7 +64,6 @@ export class ImmichRootDirectory extends VirtualDirectory
     {
         return new Map([
             [this.dir_albums.name, this.dir_albums as VirtualNode],
-            [this.dir_tags.name, this.dir_tags as VirtualNode],
             [this.dir_unsorted.name, this.dir_unsorted as VirtualNode],
             [this.dir_trash.name, this.dir_trash as VirtualNode],
             [this.file_metadata.name, this.file_metadata as VirtualNode],
