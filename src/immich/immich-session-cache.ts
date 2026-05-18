@@ -58,21 +58,15 @@ export class ImmichSessionCache
 
     public static Instance(user: ImmichUser | null): ImmichSessionCache
     {
-        if (!user) throw new Error("User not loaded!");
+        if (!user) return new ImmichSessionCache();
 
-        if (!this._instances.has(user.id))
+        let instance = this._instances.get(user.id);
+        if (!instance)
         {
-            var new_session = new ImmichSessionCache()
-            this._instances.set(user.id, new_session)
-            return new_session
+            instance = new ImmichSessionCache();
+            this._instances.set(user.id, instance);
         }
-        else
-        {
-            var cached_session = this._instances.get(user.id);
-            if (cached_session) return cached_session;
-            else throw new Error("Cache Map has reached an invalid state!");
-        }
-
+        return instance;
     }
 
     public async fetchedCachedAssetLists(cacheKey: string, { fetchMeta, fetchData }: ImmichAssetCacheFetchArgs): Promise<ImmichVirtualAssetFile[]>
@@ -86,22 +80,28 @@ export class ImmichSessionCache
         {
             const cached = this.assetTree.get(cacheKey);
 
-            if (cached && fetchMeta)
+            // No validator: trust the cached data until an explicit invalidation.
+            if (cached && !fetchMeta) return cached.data;
+
+            if (fetchMeta)
             {
-                try
-                {
-                    const meta = await fetchMeta();
-                    if (meta.updatedAt && meta.updatedAt === cached.updatedAt)
-                    {
-                        return cached.data;
-                    }
-                } catch (_) { }
+                let freshMeta: { updatedAt?: string; checksum?: string } | undefined;
+                try { freshMeta = await fetchMeta(); } catch (_) { }
+
+                // Cache hit: API timestamp matches what we stored.
+                if (cached && freshMeta?.updatedAt && freshMeta.updatedAt === cached.updatedAt)
+                    return cached.data;
+
+                // Cache stale or missing — fetch data and store with the API timestamp.
+                const data = await fetchData();
+                const updatedAt = freshMeta?.updatedAt ?? Date.now().toString();
+                this.assetTree.set(cacheKey, { data, updatedAt });
+                return data;
             }
 
+            // No cached entry and no validator.
             const data = await fetchData();
-            const updatedAt = (data as any)?.updatedAt ?? Date.now().toString();
-            const checksum = (data as any)?.checksum;
-            this.assetTree.set(cacheKey, { data, updatedAt, checksum });
+            this.assetTree.set(cacheKey, { data, updatedAt: Date.now().toString() });
             return data;
         })();
 
@@ -118,22 +118,32 @@ export class ImmichSessionCache
         {
             const cached = this.albumsTree.get(cacheKey);
 
-            if (cached && fetchMeta)
+            // No validator: trust the cached tree until an explicit invalidation.
+            if (cached && !fetchMeta) return cached.data;
+
+            if (fetchMeta)
             {
-                try
-                {
-                    const meta = await fetchMeta();
-                    if (meta.updatedAt && meta.updatedAt === cached.updatedAt)
-                    {
-                        return cached.data;
-                    }
-                } catch (_) { }
+                let freshMeta: { updatedAt?: string; checksum?: string } | undefined;
+                try { freshMeta = await fetchMeta(); } catch (_) { }
+
+                // Cache hit: API timestamp matches what we stored.
+                if (cached && freshMeta?.updatedAt && freshMeta.updatedAt === cached.updatedAt)
+                    return cached.data;
+
+                // Cache stale or missing — fetch data and store with the API timestamp.
+                const data = await fetchData();
+                const updatedAt = freshMeta?.updatedAt ?? Date.now().toString();
+                this.albumsTree.set(cacheKey, { data, updatedAt });
+
+                const album = data?.album ?? undefined;
+                if (album) this.albumsMap.set(cacheKey, cacheKey);
+
+                return data;
             }
 
+            // No cached entry and no validator.
             const data = await fetchData();
-            const updatedAt = (data as any)?.updatedAt ?? Date.now().toString();
-            const checksum = (data as any)?.checksum;
-            this.albumsTree.set(cacheKey, { data, updatedAt, checksum });
+            this.albumsTree.set(cacheKey, { data, updatedAt: Date.now().toString() });
 
             const album = data?.album ?? undefined;
             if (album) this.albumsMap.set(cacheKey, cacheKey);

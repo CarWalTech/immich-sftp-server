@@ -92,7 +92,10 @@ export class VirtualMetadata
             false,
             size,
             mtime,
-            VirtualMetadata.MODE_FILE
+            VirtualMetadata.MODE_FILE,
+            0,
+            0,
+            mtime
             //0o100644 // rw-r--r--
         );
     }
@@ -106,7 +109,10 @@ export class VirtualMetadata
             false,
             size,
             mtime,
-            VirtualMetadata.MODE_FILE
+            VirtualMetadata.MODE_FILE,
+            0,
+            0,
+            mtime
             //0o100444 // r--r--r--
         );
     }
@@ -120,7 +126,10 @@ export class VirtualMetadata
             true,
             0,
             mtime,
-            VirtualMetadata.MODE_DIR
+            VirtualMetadata.MODE_DIR,
+            0,
+            0,
+            mtime
         );
     }
 
@@ -133,7 +142,10 @@ export class VirtualMetadata
             true,
             0,
             mtime,
-            VirtualMetadata.MODE_DIR_READONLY
+            VirtualMetadata.MODE_DIR_READONLY,
+            0,
+            0,
+            mtime
         );
     }
 
@@ -146,7 +158,10 @@ export class VirtualMetadata
             false,
             0,
             now,
-            VirtualMetadata.MODE_FILE
+            VirtualMetadata.MODE_FILE,
+            0,
+            0,
+            now
         );
     }
 }

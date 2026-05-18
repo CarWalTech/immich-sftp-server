@@ -31,10 +31,6 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
         this.albums_root = albums_root
     }
 
-    needsRefresh()
-    {
-        return true;
-    }
 
     public get_album_data()
     {
