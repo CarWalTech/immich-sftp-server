@@ -43,11 +43,25 @@ export class ImmichVirtualAssetFile extends VirtualFile
 
     async event_stat(): Promise<VirtualMetadata>
     {
-        // fileSizeInByte is 0 when Immich has no exifInfo for the asset.
-        // Fall back to the download/info endpoint which asks Immich for the actual size.
-        const size = this.asset.fileSizeInByte > 0
-            ? this.asset.fileSizeInByte
-            : await this.file_system.getApi().SERVER_GetAssetFileSize(this.asset);
+        const api = this.file_system.getApi();
+        let size: number;
+
+        if (api.getUserSettings().assetDownloadSource === 'preview')
+        {
+            // In preview mode report the preview image size so clients (e.g. Dolphin)
+            // don't skip thumbnail generation due to a large original file size.
+            size = await api.SERVER_GetAssetPreviewSize(this.asset);
+            if (size === 0) size = this.asset.fileSizeInByte; // fallback if HEAD fails
+        }
+        else
+        {
+            // fileSizeInByte is 0 when Immich has no exifInfo for the asset.
+            // Fall back to the download/info endpoint which asks Immich for the actual size.
+            size = this.asset.fileSizeInByte > 0
+                ? this.asset.fileSizeInByte
+                : await api.SERVER_GetAssetFileSize(this.asset);
+        }
+
         return VirtualMetadata.file_ro(this.name, size, getAssetMtime(this.asset));
     }
 

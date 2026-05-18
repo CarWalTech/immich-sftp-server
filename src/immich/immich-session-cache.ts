@@ -39,6 +39,7 @@ export class ImmichSessionCache
 {
     albumsMap: Map<string, string>
     assetFileSizes: Map<string, number>;
+    assetPreviewSizes: Map<string, number>;
     assetFileBuffers: Map<string, VirtualContentBuffer>;
 
     // Stores raw asset data — no connection-specific references.
@@ -57,6 +58,7 @@ export class ImmichSessionCache
     {
         this.assetTree = new Map()
         this.assetFileSizes = new Map()
+        this.assetPreviewSizes = new Map()
         this.assetFileBuffers = new Map()
 
         this.albumsMap = new Map()
@@ -175,6 +177,7 @@ export class ImmichSessionCache
         for (const id of assetIds)
         {
             this.assetFileSizes.delete(id);
+            this.assetPreviewSizes.delete(id);
             const buf = this.assetFileBuffers.get(id);
             if (buf?.isTmp) buf.removeCallback();
             this.assetFileBuffers.delete(id);
@@ -209,6 +212,7 @@ export class ImmichSessionCache
         this.assetTree.clear();
         this.assetFileBuffers.clear();
         this.assetFileSizes.clear();
+        this.assetPreviewSizes.clear();
         this.albumsMap.clear()
         this.albumsTree.clear()
     }

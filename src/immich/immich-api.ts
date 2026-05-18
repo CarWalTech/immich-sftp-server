@@ -787,6 +787,33 @@ export class ImmichAPI
             skipResponseLog: true,
         });
     }
+    async SERVER_GetAssetPreviewSize(asset: ImmichAsset): Promise<number>
+    {
+        const cached = this.cache.assetPreviewSizes.get(asset.id);
+        if (cached !== undefined) return cached;
+
+        try
+        {
+            const response = await axios.request({
+                method: 'HEAD',
+                url: `${this.baseUrl}/api/assets/${asset.id}/preview`,
+                timeout: 10_000,
+                headers: {
+                    'User-Agent': 'ImmichNetworkStorage (Linux)',
+                    ...(this.authMode === 'api-key'
+                        ? { 'x-api-key': this.immichAccessToken }
+                        : { 'Authorization': `Bearer ${this.immichAccessToken}` }),
+                },
+            });
+            const size = parseInt(response.headers['content-length'] ?? '0', 10) || 0;
+            this.cache.assetPreviewSizes.set(asset.id, size);
+            return size;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
     async SERVER_GetAssetFileSize(asset: ImmichAsset): Promise<number>
     {
         const cached = this.cache.assetFileSizes.get(asset.id);
@@ -856,8 +883,10 @@ export class ImmichAPI
             return buf;
         }
 
-        // 3. Determine endpoint
-        const endpoint = `assets/${asset.id}/original`;
+        // 3. Determine endpoint based on user's download source setting
+        const endpoint = this.userSettings.assetDownloadSource === 'preview'
+            ? `assets/${asset.id}/preview`
+            : `assets/${asset.id}/original`;
 
         // 4. Acquire slot — prevents a directory full of files from all downloading
         //    simultaneously, which exhausts bandwidth and triggers the 30s timeout.

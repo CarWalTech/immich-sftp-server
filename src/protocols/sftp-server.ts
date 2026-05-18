@@ -426,17 +426,19 @@ async function SFTP_CLOSE(self: SftpConnectionInstance, reqid: number, handle: B
 
     entry.closed = true;
 
-    // If a download is still in progress, wait for it to settle before
-    // calling removeCallback — otherwise the tmp file leaks because
-    // readNode hasn't been assigned yet when we reach the cleanup below.
-    if (entry.readInitPromise)
-    {
-      try { await entry.readInitPromise; } catch { /* download failed — readNode may still be null */ }
-    }
-
     if (entry.readNode)
     {
+      // Download already finished — clean up the buffer/tmp file immediately.
       entry.readNode.removeCallback();
+    }
+    else if (entry.readInitPromise)
+    {
+      // Download still in progress. Respond to the client now so it isn't
+      // blocked (Dolphin thumbnail workers have a tight per-job timeout).
+      // Clean up the node asynchronously once the download settles.
+      entry.readInitPromise
+        .then(() => { entry.readNode?.removeCallback(); })
+        .catch(() => { /* download failed — nothing to clean up */ });
     }
 
     if (entry.writeNode)
