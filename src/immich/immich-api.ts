@@ -26,14 +26,6 @@ import { ImmichVirtualAssetFile } from './collections/immich-virtual-asset-file'
 import { ImmichAlbumFolder } from './collections/immich-album-folder';
 import { ImmichVirtualDirectory } from './collections/immich-virtual-directory';
 
-// Default simultaneous download cap — overridden by MAX_CONCURRENT_DOWNLOADS env var.
-// Raising this speeds up thumbnail-heavy directories; lower it on bandwidth-constrained hosts.
-const DEFAULT_MAX_CONCURRENT_DOWNLOADS = 6;
-
-// Files larger than this threshold are written to a temp file on disk
-// instead of being collected into a heap Buffer.
-const DOWNLOAD_BUFFER_THRESHOLD = 4 * 1024 * 1024; // 4 MB
-
 /**
  * Lightweight counting semaphore for concurrency control.
  */
@@ -76,7 +68,7 @@ export class ImmichAPI
     private userDisplaySettings: UserDisplaySettings | null = null;
     private shouldLogoutSession = false;
     private readonly baseUrl;
-    private readonly downloadSemaphore = new DownloadSemaphore(config.maxConcurrentDownloads || DEFAULT_MAX_CONCURRENT_DOWNLOADS);
+    private readonly downloadSemaphore = new DownloadSemaphore(config.maxConcurrentDownloads);
 
     constructor(immich_url: string)
     {
@@ -457,9 +449,9 @@ export class ImmichAPI
             {
                 const normal_items = await this.FETCH_AssetsByMetadata({ isNotInAlbum: true })
                 const archived_items = await this.FETCH_AssetsByMetadata({ isNotInAlbum: true, visibility: "archive" })
-                const all_assets: ImmichAsset[] = [...normal_items, ...archived_items]
-                return mapFilesFromAssets(all_assets, parent, reserved_names)
-            }
+                return [...normal_items, ...archived_items];
+            },
+            buildFiles: (assets) => mapFilesFromAssets(assets, parent, reserved_names)
         });
     }
     public async FETCH_AssetsForTrash(parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetFile[]>
@@ -471,9 +463,9 @@ export class ImmichAPI
             {
                 const normal_items = await this.FETCH_AssetsByMetadata({ trashedBefore: DateTime.now().toJSDate().toISOString() })
                 const archived_items = await this.FETCH_AssetsByMetadata({ trashedBefore: DateTime.now().toJSDate().toISOString(), visibility: "archive" })
-                const all_assets: ImmichAsset[] = [...normal_items, ...archived_items]
-                return mapFilesFromAssets(all_assets, parent, reserved_names)
-            }
+                return [...normal_items, ...archived_items];
+            },
+            buildFiles: (assets) => mapFilesFromAssets(assets, parent, reserved_names)
         });
     }
     public async FETCH_AssetsForAlbum(album: ImmichAlbumDirectoryInfo, parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetFile[]>
@@ -494,7 +486,6 @@ export class ImmichAPI
 
             fetchData: async () =>
             {
-                // Fetch assets
                 const response = await this.callApi({
                     method: 'GET',
                     endpoint: `albums/${album.id}`,
@@ -504,13 +495,11 @@ export class ImmichAPI
 
                 applyAlbumDetails(album, response);
 
-                //const normal_items = (response.assets ?? []).map((asset: any): ImmichAsset => ImmichAssetUtils.mapAssetFromApi(asset));
                 const normal_items = await this.FETCH_AssetsByMetadata({ albumIds: [album.id], visibility: "timeline" })
                 const archived_items = await this.FETCH_AssetsByMetadata({ albumIds: [album.id], visibility: "archive" })
-
-                const all_assets: ImmichAsset[] = [...normal_items, ...archived_items]
-                return mapFilesFromAssets(all_assets, parent, reserved_names)
-            }
+                return [...normal_items, ...archived_items];
+            },
+            buildFiles: (assets) => mapFilesFromAssets(assets, parent, reserved_names)
         });
     }
     public async FETCH_AssetsForTag(tag: ImmichTagDirectoryInfo, parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetFile[]>
@@ -531,13 +520,11 @@ export class ImmichAPI
 
             fetchData: async () =>
             {
-                // Fetch assets
                 const normal_items = await this.FETCH_AssetsByMetadata({ tagIds: [tag.id], visibility: "timeline" })
                 const archived_items = await this.FETCH_AssetsByMetadata({ tagIds: [tag.id], visibility: "archive" })
-
-                const all_assets: ImmichAsset[] = [...normal_items, ...archived_items]
-                return mapFilesFromAssets(all_assets, parent, reserved_names)
-            }
+                return [...normal_items, ...archived_items];
+            },
+            buildFiles: (assets) => mapFilesFromAssets(assets, parent, reserved_names)
         });
     }
     public async FETCH_AssetsByMetadata(query: { albumIds?: string[], visibility?: string, tagIds?: string[]; personIds?: string[], isNotInAlbum?: boolean, trashedAfter?: string, trashedBefore?: string }): Promise<ImmichAsset[]>
@@ -899,7 +886,7 @@ export class ImmichAPI
 
             logger.debug(`ImmichAPI`, 'SERVER_ReadAsset', `Downloading ${asset.id} via ${endpoint}, Content-Length=${contentLength}`);
 
-            if (contentLength > DOWNLOAD_BUFFER_THRESHOLD)
+            if (contentLength > config.downloadBufferThreshold)
             {
                 // Large file — stream to a temp file to avoid heap pressure.
                 // This is important when Dolphin (or similar) opens many large
