@@ -91,14 +91,7 @@ export class VirtualDirectory extends VirtualNode
     async event_list(): Promise<VirtualMetadata[]>
     {
         const nodes = await this.nodes(this._refreshOnReadDir);
-        const results = new Array<VirtualMetadata>(nodes.length);
-
-        for (let i = 0; i < nodes.length; i++)
-        {
-            results[i] = await nodes[i].event_stat(); // sync call
-        }
-
-        return results;
+        return Promise.all(nodes.map(n => n.event_stat()));
     }
     async event_readfile(): Promise<VirtualContentBuffer>
     {

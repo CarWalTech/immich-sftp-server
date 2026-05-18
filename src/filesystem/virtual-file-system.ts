@@ -22,6 +22,7 @@ export interface VirtualFileSystem
 
     login(username: string, password: string): Promise<void>;
     logout(): Promise<void>;
+    isAuthenticated(): boolean;
 }
 
 

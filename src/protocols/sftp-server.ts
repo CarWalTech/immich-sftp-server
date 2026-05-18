@@ -59,32 +59,36 @@ function TCP_Error(con: SftpConnection, err: Error)
 
 function TCP_Session(con: SftpConnection, accept: AcceptConnection<Session>, reject: RejectConnection)
 {
+  // Reject the session if the user has not completed login on this connection.
+  if (!con.fsBackend?.isAuthenticated())
+  {
+    logger.warn('SFTP', 'SESSION', 'Session requested without authenticated user — rejecting.');
+    reject();
+    return;
+  }
+
   const session = accept();
   logger.info('SFTP', 'SOCKET', 'Session started');
   session.on('sftp', (accept, reject) =>
   {
+    const fsBackend = con.fsBackend;
+    const netConfig = con.cfg;
+
+    // Re-check: the user could have logged out between the session open and
+    // the SFTP subsystem request (e.g. TCP_End fired concurrently).
+    if (!fsBackend || !fsBackend.isAuthenticated() || !netConfig)
+    {
+      logger.warn('SFTP', 'SOCKET', 'SFTP subsystem requested with no authenticated backend — rejecting.');
+      reject();
+      return;
+    }
+
     //Accept SFTP session
     const sftpStream = accept();
     logger.info('SFTP', 'SOCKET', 'SFTP session started');
 
-    //Find backend or close connection
-    const fsBackend = con.fsBackend;
-    if (!fsBackend)
-    {
-      logger.error('SFTP', 'SOCKET', 'File system backend is not initialized. Closing connection.');
-      return con.end();
-    }
-
     //Handle map
     const handleMap: Record<string, SftpHandleEntry> = {};
-
-    // Connection config
-    const netConfig = con.cfg
-    if (!netConfig)
-    {
-      logger.error('SFTP', 'SOCKET', 'Connection Config is not initialized. Closing connection.');
-      return con.end();
-    }
 
     const service: SftpConnectionInstance = {
       fsBackend,
