@@ -1,3 +1,4 @@
+import { FileEntry } from "ssh2";
 
 export class VirtualMetadata
 {
@@ -50,9 +51,42 @@ export class VirtualMetadata
         this.gid = gid;
     }
 
-    /** Regular file, read-write */
-    public static file_rw(name: string, size: number, mtime: number): VirtualMetadata
+
+    get longname()
     {
+        const perms = this.isDir ? 'drwxr-xr-x' : '-rw-r--r--';
+        const d = new Date(this.mtime * 1000);
+        const dateStr = `${d.getFullYear()}-${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')}`;
+        return `${perms} 1 user group ${this.size} ${dateStr} ${this.name}`
+    }
+
+    convertTo(method: 'sftp' | 'unknown')
+    {
+        switch (method)
+        {
+            case "sftp":
+                return {
+                    filename: this.name,
+                    longname: this.longname,
+                    attrs: {
+                        size: this.size,
+                        mtime: this.mtime,
+                        atime: this.atime,
+                        mode: this.mode,
+                        uid: this.uid,
+                        gid: this.gid,
+                    }
+                } as FileEntry
+            case "unknown":
+                throw new Error("unknown conversion type for Virtual Metadata")
+        }
+
+    }
+
+    /** Regular file, read-write */
+    public static file_rw(name: string, size: number, mtime?: number): VirtualMetadata
+    {
+        if (!mtime) mtime = Date.now() / 1000
         return new VirtualMetadata(
             name,
             false,
@@ -64,8 +98,9 @@ export class VirtualMetadata
     }
 
     /** Regular file, read-only */
-    public static file_ro(name: string, size: number, mtime: number): VirtualMetadata
+    public static file_ro(name: string, size: number, mtime?: number): VirtualMetadata
     {
+        if (!mtime) mtime = Date.now() / 1000
         return new VirtualMetadata(
             name,
             false,
@@ -77,8 +112,9 @@ export class VirtualMetadata
     }
 
     /** Directory, read-write */
-    public static directory_rw(name: string, mtime: number): VirtualMetadata
+    public static directory_rw(name: string, mtime?: number): VirtualMetadata
     {
+        if (!mtime) mtime = Date.now() / 1000
         return new VirtualMetadata(
             name,
             true,
@@ -89,8 +125,9 @@ export class VirtualMetadata
     }
 
     /** Directory, read-only */
-    public static directory_ro(name: string, mtime: number): VirtualMetadata
+    public static directory_ro(name: string, mtime?: number): VirtualMetadata
     {
+        if (!mtime) mtime = Date.now() / 1000
         return new VirtualMetadata(
             name,
             true,

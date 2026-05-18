@@ -43,18 +43,12 @@ export class ImmichVirtualAssetFile extends VirtualFile
 
     async event_stat(): Promise<VirtualMetadata>
     {
-        const settings = this.file_system.getUserSettings();
-
-        // In preview mode the download endpoint returns a compressed thumbnail,
-        // not the original file, so asset.fileSizeInByte is wrong. Report 0 so
-        // clients treat the size as unknown and read to EOF rather than stopping
-        // at the original file size and discarding a "truncated" result.
-        // FSTAT on an open handle is always accurate because it awaits the download.
-        const reportedSize = settings.assetDownloadSource === 'preview'
-            ? 0
-            : this.asset.fileSizeInByte;
-
-        return VirtualMetadata.file_ro(this.name, reportedSize, getAssetMtime(this.asset));
+        // fileSizeInByte is 0 when Immich has no exifInfo for the asset.
+        // Fall back to the download/info endpoint which asks Immich for the actual size.
+        const size = this.asset.fileSizeInByte > 0
+            ? this.asset.fileSizeInByte
+            : await this.file_system.getApi().SERVER_GetAssetFileSize(this.asset);
+        return VirtualMetadata.file_ro(this.name, size, getAssetMtime(this.asset));
     }
 
     async event_readfile(): Promise<VirtualContentBuffer>

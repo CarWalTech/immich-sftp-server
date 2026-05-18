@@ -93,7 +93,7 @@ function TCP_Session(con: SftpConnection, accept: AcceptConnection<Session>, rej
       netConfig
     }
 
-    sftpStream.on('ready', async () => { await SFTP_Ready(service) });
+    sftpStream.on('ready', async () => { await SFTP_READY(service) });
     sftpStream.on('OPEN', async (reqid: number, filename: string, flags: number, attrs: Attributes) => { await SFTP_OPEN(service, reqid, filename, flags, attrs) });
     sftpStream.on('READ', async (reqid: number, handle: Buffer, offset: number, len: number) => { await SFTP_READ(service, reqid, handle, offset, len) });
     sftpStream.on('WRITE', async (reqid: number, handle: Buffer, offset: number, data: Buffer) => { await SFTP_WRITE(service, reqid, handle, offset, data) });
@@ -118,40 +118,24 @@ function TCP_Session(con: SftpConnection, accept: AcceptConnection<Session>, rej
 
 // #endregion
 
-// #region SFTP Functions
+// #region SFTP Functions: DIR
 
-async function SFTP_Ready(self: SftpConnectionInstance)
-{
-
-}
 async function SFTP_REALPATH(self: SftpConnectionInstance, reqid: number, givenPath: string)
 {
   try
   {
     const normalized = normalizePath(givenPath);
     logger.info('SFTP', 'REALPATH', `reqid=${reqid} path=${givenPath} → ${normalized}`);
-
-    const now = Math.floor(Date.now() / 1000);
-
-    logger.info('SFTP', 'REALPATH', `RESPOND name reqid=${reqid}`);
     self.sftpStream.name(reqid, [
       {
         filename: normalized,
         longname: `drwxr-xr-x 1 user group 0 0 Jan 1 00:00 ${normalized}`,
-        attrs: {
-          mode: 0o040755,
-          uid: 0,
-          gid: 0,
-          size: 0,
-          atime: now,
-          mtime: now
-        }
+        attrs: createFolderAttributes()
       }
     ]);
   } catch (e)
   {
-    logger.error('SFTP', 'REALPATH', 'error:', e);
-    logger.info('SFTP', 'REALPATH', `RESPOND failure reqid=${reqid}`);
+    logger.error('SFTP', 'REALPATH', `reqid=${reqid} error=${e}`);
     self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
   }
 }
@@ -173,13 +157,10 @@ async function SFTP_OPENDIR(self: SftpConnectionInstance, reqid: number, rawPath
       directoryEntryRead: false,
       readInitPromise: null
     };
-
-    logger.info('SFTP', 'OPENDIR', `RESPOND handle reqid=${reqid} handle=${key}`);
     self.sftpStream.handle(reqid, handle);
   } catch (e)
   {
-    logger.error('SFTP', 'OPENDIR', 'error:', e);
-    logger.info('SFTP', 'OPENDIR', `RESPOND failure reqid=${reqid}`);
+    logger.error('SFTP', 'OPENDIR', `reqid=${reqid} error=${e}`);
     self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
   }
 }
@@ -210,6 +191,41 @@ async function SFTP_READDIR(self: SftpConnectionInstance, reqid: number, handle:
     });
   }
 }
+async function SFTP_MKDIR(self: SftpConnectionInstance, reqid: number, dirPath: string, attrs: Attributes)
+{
+  try
+  {
+    const normalized = normalizePath(dirPath);
+    logger.info('SFTP', 'MKDIR', `: ${normalized}`);
+
+    await self.fsBackend.mkdir(normalized);
+    self.sftpStream.status(reqid, SFTP_STATUS_CODE.OK);
+  } catch (e)
+  {
+    logger.error('SFTP', 'MKDIR', 'error:', e);
+    self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
+  }
+}
+async function SFTP_RMDIR(self: SftpConnectionInstance, reqid: number, dirPath: string)
+{
+  try
+  {
+    const normalized = normalizePath(dirPath);
+    logger.info('SFTP', 'RMDIR', `: ${normalized}`);
+
+    await self.fsBackend.remove(normalized);
+    self.sftpStream.status(reqid, SFTP_STATUS_CODE.OK);
+  } catch (e)
+  {
+    logger.error('SFTP', 'RMDIR', 'error:', e);
+    self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
+  }
+}
+
+// #endregion
+
+// #region SFTP Functions: INPUT/OUTPUT
+
 async function SFTP_OPEN(self: SftpConnectionInstance, reqid: number, filename: string, flags: number, attrs: Attributes)
 {
   try
@@ -219,7 +235,7 @@ async function SFTP_OPEN(self: SftpConnectionInstance, reqid: number, filename: 
     const key = crypto.randomBytes(16).toString('hex');
     const handle = Buffer.from(key, 'ascii');
 
-    //logger.info('SFTP', 'OPEN', `for: '${normalized}' (${filename}), handle: ${key}`);
+    logger.info('SFTP', 'OPEN', `for: '${normalized}' (${filename}), handle: ${key}`);
 
     const entry: SftpHandleEntry = {
       path: normalized,
@@ -360,6 +376,38 @@ async function SFTP_WRITE(self: SftpConnectionInstance, reqid: number, handle: B
     self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
   }
 }
+async function SFTP_REMOVE(self: SftpConnectionInstance, reqid: number, filePath: string)
+{
+  try
+  {
+    const normalized = normalizePath(filePath);
+    logger.info('SFTP', 'REMOVE', `requested: ${normalized}`);
+
+    const result = await self.fsBackend.remove(normalized);
+    if (result) self.sftpStream.status(reqid, SFTP_STATUS_CODE.OK);
+    else self.sftpStream.status(reqid, SFTP_STATUS_CODE.PERMISSION_DENIED);
+  } catch (e)
+  {
+    logger.error('SFTP', 'REMOVE', 'error:', e);
+    self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
+  }
+}
+async function SFTP_RENAME(self: SftpConnectionInstance, reqid: number, oldPath: string, newPath: string)
+{
+  try
+  {
+    const oldName = normalizePath(oldPath);
+    const newName = normalizePath(newPath);
+    logger.info('SFTP', 'RENAME', `requested: ${oldName} → ${newName}`);
+
+    await self.fsBackend.rename(oldName, newName);
+    self.sftpStream.status(reqid, SFTP_STATUS_CODE.OK);
+  } catch (e)
+  {
+    logger.error('SFTP', 'RENAME', 'error:', e);
+    self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
+  }
+}
 async function SFTP_CLOSE(self: SftpConnectionInstance, reqid: number, handle: Buffer)
 {
   try
@@ -402,7 +450,11 @@ async function SFTP_CLOSE(self: SftpConnectionInstance, reqid: number, handle: B
     self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
   }
 }
-async function SFTP_STAT(self: SftpConnectionInstance, reqid: number, filePath: string)
+
+// #endregion
+
+// #region SFTP Functions: STAT
+async function SFTP_STAT(self: SftpConnectionInstance, reqid: number, filePath: string, mode: string = 'STAT')
 {
   try
   {
@@ -410,21 +462,14 @@ async function SFTP_STAT(self: SftpConnectionInstance, reqid: number, filePath: 
 
     if (normalized === '/')
     {
-      logger.info('SFTP', 'STAT', `RESPOND attrs (root) reqid=${reqid}`);
-      return self.sftpStream.attrs(reqid, {
-        mode: 0o040755,
-        uid: 0,
-        gid: 0,
-        size: 0,
-        mtime: Date.now() / 1000,
-        atime: Date.now() / 1000
-      });
+      logger.info('SFTP', mode, `RESPOND attrs (root) reqid=${reqid}`);
+      return self.sftpStream.attrs(reqid, createFolderAttributes());
     }
 
     const stat = await self.fsBackend.stat(normalized);
     if (!stat)
     {
-      logger.info('SFTP', 'STAT', `RESPOND NO_SUCH_FILE reqid=${reqid}`);
+      logger.info('SFTP', mode, `RESPOND NO_SUCH_FILE reqid=${reqid}`);
       return self.sftpStream.status(reqid, SFTP_STATUS_CODE.NO_SUCH_FILE);
     }
 
@@ -438,67 +483,14 @@ async function SFTP_STAT(self: SftpConnectionInstance, reqid: number, filePath: 
     });
   } catch (e)
   {
-    logger.error('SFTP', 'STAT', 'error:', e);
-    logger.info('SFTP', 'STAT', `RESPOND failure reqid=${reqid}`);
-    self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
-  }
-}
-async function SFTP_SETSTAT(self: SftpConnectionInstance, reqid: number, filePath: string, attrs: Attributes)
-{
-  try
-  {
-    const normalized = normalizePath(filePath);
-    logger.info('SFTP', 'SERVER', `SETSTAT: ${normalized}`, attrs);
-
-    await self.fsBackend.setAttributes(normalized, attrs.mtime);
-    self.sftpStream.status(reqid, SFTP_STATUS_CODE.OK);
-  } catch (e)
-  {
-    logger.error('SFTP', 'SETSTAT', 'error:', e);
+    logger.error('SFTP', mode, `RESPOND failure reqid=${reqid} error: `, e);
     self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
   }
 }
 async function SFTP_LSTAT(self: SftpConnectionInstance, reqid: number, path: string)
 {
-  try
-  {
-    const normalized = normalizePath(path);
-
-    if (normalized === '/')
-    {
-      logger.info('SFTP', 'LSTAT', `RESPOND attrs (root) reqid=${reqid}`);
-      return self.sftpStream.attrs(reqid, {
-        mode: 0o040755,
-        uid: 0,
-        gid: 0,
-        size: 0,
-        mtime: Date.now() / 1000,
-        atime: Date.now() / 1000
-      });
-    }
-
-    const stat = await self.fsBackend.stat(normalized);
-    if (!stat)
-    {
-      logger.info('SFTP', 'LSTAT', `RESPOND NO_SUCH_FILE reqid=${reqid}`);
-      return self.sftpStream.status(reqid, SFTP_STATUS_CODE.NO_SUCH_FILE);
-    }
-
-
-    self.sftpStream.attrs(reqid, {
-      mode: stat.mode,
-      uid: stat.uid,
-      gid: stat.gid,
-      size: stat.size,
-      mtime: stat.mtime,
-      atime: stat.mtime
-    });
-  } catch (e)
-  {
-    logger.error('SFTP', 'LSTAT', 'error:', e);
-    logger.info('SFTP', 'LSTAT', `RESPOND failure reqid=${reqid}`);
-    self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
-  }
+  // No symlink support — LSTAT and STAT are equivalent.
+  return SFTP_STAT(self, reqid, path, 'LSTAT');
 }
 async function SFTP_FSTAT(self: SftpConnectionInstance, reqid: number, handle: Buffer)
 {
@@ -509,52 +501,68 @@ async function SFTP_FSTAT(self: SftpConnectionInstance, reqid: number, handle: B
 
     if (!entry)
     {
+      logger.info('SFTP', 'FSTAT', `RESPOND NO_SUCH_FILE reqid=${reqid}`);
       return self.sftpStream.status(reqid, SFTP_STATUS_CODE.NO_SUCH_FILE);
     }
 
     if (entry.writeNode)
     {
-      return self.sftpStream.attrs(reqid, {
-        mode: 0o100644,
-        uid: 0,
-        gid: 0,
-        size: entry.writeNode.size,
-        atime: Date.now() / 1000,
-        mtime: Date.now() / 1000
-      });
+      logger.info('SFTP', 'FSTAT', `RESPOND attrs ${entry.path} reqid=${reqid}`);
+      return self.sftpStream.attrs(reqid, createFileAttributes(entry.writeNode.size));
     }
 
-    // For read handles: await the download so we return the size of the data the
-    // client will actually receive, not the backend's metadata size. This matters
-    // when the download endpoint differs from the original (e.g. preview/thumbnail
-    // mode) — mismatched sizes cause clients like Dolphin to discard truncated data.
     if (entry.readInitPromise)
     {
+      // Download already finished — return the exact byte count that will be served.
+      if (entry.readSize !== undefined)
+      {
+
+        logger.info('SFTP', 'FSTAT', `RESPOND attrs ${entry.path} reqid=${reqid}`);
+        return self.sftpStream.attrs(reqid, createFileAttributes(entry.readSize));
+      }
+
+      // Download still in progress — try to respond immediately using metadata size
+      // so the client is not blocked waiting for the full file download.
+      // If the metadata size is unavailable (asset has no exifInfo AND the HTTP
+      // fallback also fails), fall through to awaiting the actual download so we
+      // always return an accurate byte count rather than zero.
+      const stat = await self.fsBackend.stat(entry.path).catch(() => null);
+      if (stat && stat.size > 0)
+      {
+        logger.info('SFTP', 'FSTAT', `RESPOND still-downloading ${entry.path} reqid=${reqid}`);
+        return self.sftpStream.attrs(reqid, createFileAttributes(stat.size));
+      }
+
+      // Size unknown — wait for the download so the response is always accurate.
       await entry.readInitPromise;
-      const now = Date.now() / 1000;
-      return self.sftpStream.attrs(reqid, {
-        mode: 0o100644,
-        uid: 0,
-        gid: 0,
-        size: entry.readSize ?? entry.readNode?.size ?? 0,
-        atime: now,
-        mtime: now
-      });
+      logger.info('SFTP', 'FSTAT', `RESPOND unknown-size ${entry.path} reqid=${reqid}`);
+      return self.sftpStream.attrs(reqid, createFileAttributes(entry.readSize ?? entry.readNode?.size ?? 0));
     }
 
-    const stat = await self.fsBackend.stat(entry.path);
-
-    return self.sftpStream.attrs(reqid, {
-      mode: stat.mode,
-      uid: stat.uid,
-      gid: stat.gid,
-      size: stat.size,
-      atime: stat.mtime,
-      mtime: stat.mtime
-    });
+    // No handle-specific state — delegate to path-based STAT.
+    return SFTP_STAT(self, reqid, entry.path, 'FSTAT');
   }
   catch (e)
   {
+    self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
+  }
+}
+// #endregion
+
+// #region SFTP Functions: SETSTAT
+
+async function SFTP_SETSTAT(self: SftpConnectionInstance, reqid: number, filePath: string, attrs: Attributes, mode: string = 'SETSTAT')
+{
+  try
+  {
+    const normalized = normalizePath(filePath);
+    logger.info('SFTP', `${mode}`, `RESPOND reqid=${reqid} path=${normalized}`, attrs);
+
+    await self.fsBackend.setAttributes(normalized, attrs.mtime);
+    self.sftpStream.status(reqid, SFTP_STATUS_CODE.OK);
+  } catch (e)
+  {
+    logger.error('SFTP', mode, 'error:', e);
     self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
   }
 }
@@ -567,12 +575,14 @@ async function SFTP_FSETSTAT(self: SftpConnectionInstance, reqid: number, handle
 
     if (!entry)
     {
+      logger.info('SFTP', 'FSETSTAT', `RESPOND NO_SUCH_FILE reqid=${reqid}`);
       return self.sftpStream.status(reqid, SFTP_STATUS_CODE.NO_SUCH_FILE);
     }
 
     // If writing, apply to the in‑progress node when possible
     if (entry.writeNode)
     {
+      logger.info('SFTP', 'FSETSTAT', `RESPOND reqid=${reqid} path=${entry.path}`, attrs);
       if (attrs.mtime && entry.writeNode.isTmp)
       {
         // Only tmp-backed nodes have a real path we can utime
@@ -581,9 +591,8 @@ async function SFTP_FSETSTAT(self: SftpConnectionInstance, reqid: number, handle
       return self.sftpStream.status(reqid, SFTP_STATUS_CODE.OK);
     }
 
-    // Otherwise apply directly to backend
-    await self.fsBackend.setAttributes(entry.path, attrs.mtime);
-    self.sftpStream.status(reqid, SFTP_STATUS_CODE.OK);
+    // Otherwise delegate to SETSTAT using the handle's resolved path.
+    return SFTP_SETSTAT(self, reqid, entry.path, attrs, 'FSETSTAT');
   }
   catch (e)
   {
@@ -591,68 +600,10 @@ async function SFTP_FSETSTAT(self: SftpConnectionInstance, reqid: number, handle
     self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
   }
 }
-async function SFTP_RENAME(self: SftpConnectionInstance, reqid: number, oldPath: string, newPath: string)
-{
-  try
-  {
-    const oldName = normalizePath(oldPath);
-    const newName = normalizePath(newPath);
-    logger.info('SFTP', 'RENAME', `requested: ${oldName} → ${newName}`);
+// #endregion
 
-    await self.fsBackend.rename(oldName, newName);
-    self.sftpStream.status(reqid, SFTP_STATUS_CODE.OK);
-  } catch (e)
-  {
-    logger.error('SFTP', 'RENAME', 'error:', e);
-    self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
-  }
-}
-async function SFTP_REMOVE(self: SftpConnectionInstance, reqid: number, filePath: string)
-{
-  try
-  {
-    const normalized = normalizePath(filePath);
-    logger.info('SFTP', 'REMOVE', `requested: ${normalized}`);
+// #region SFTP Functions: MISC
 
-    const result = await self.fsBackend.remove(normalized);
-    if (result) self.sftpStream.status(reqid, SFTP_STATUS_CODE.OK);
-    else self.sftpStream.status(reqid, SFTP_STATUS_CODE.PERMISSION_DENIED);
-  } catch (e)
-  {
-    logger.error('SFTP', 'REMOVE', 'error:', e);
-    self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
-  }
-}
-async function SFTP_MKDIR(self: SftpConnectionInstance, reqid: number, dirPath: string, attrs: Attributes)
-{
-  try
-  {
-    const normalized = normalizePath(dirPath);
-    logger.info('SFTP', 'MKDIR', `: ${normalized}`);
-
-    await self.fsBackend.mkdir(normalized);
-    self.sftpStream.status(reqid, SFTP_STATUS_CODE.OK);
-  } catch (e)
-  {
-    logger.error('SFTP', 'MKDIR', 'error:', e);
-    self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
-  }
-}
-async function SFTP_RMDIR(self: SftpConnectionInstance, reqid: number, dirPath: string)
-{
-  try
-  {
-    const normalized = normalizePath(dirPath);
-    logger.info('SFTP', 'RMDIR', `: ${normalized}`);
-
-    await self.fsBackend.remove(normalized);
-    self.sftpStream.status(reqid, SFTP_STATUS_CODE.OK);
-  } catch (e)
-  {
-    logger.error('SFTP', 'RMDIR', 'error:', e);
-    self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
-  }
-}
 async function SFTP_EXTENDED(self: SftpConnectionInstance, reqid: number, extName: string, extData: Buffer)
 {
   logger.info('SFTP', 'EXTENDED', `: ${extName}`);
@@ -671,7 +622,10 @@ async function SFTP_SYMLINK(self: SftpConnectionInstance, reqid: number, targetP
   // No symlink support → return OP_UNSUPPORTED
   self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
 }
+async function SFTP_READY(self: SftpConnectionInstance)
+{
 
+}
 
 // #endregion
 
@@ -735,38 +689,9 @@ async function processReadDirQueue(entry: SftpHandleEntry, key: string, self: Sf
     if (!entry.files)
     {
       logger.info('SFTP', 'READDIR', `init listing for handle=${key} path='${entry.path}'`);
-
-      const now = Math.floor(Date.now() / 1000);
-
-      const dotEntries: VirtualMetadata[] = [
-        VirtualMetadata.directory_ro('.', now),
-        VirtualMetadata.directory_ro('..', now),
-      ];
-
+      const dotEntries: VirtualMetadata[] = [VirtualMetadata.directory_ro('.'), VirtualMetadata.directory_ro('..')];
       const realFiles = await self.fsBackend.listFiles(entry.path);
-
-      entry.files = [...dotEntries, ...realFiles].map((file) =>
-      {
-        const perms = file.isDir ? 'drwxr-xr-x' : '-rw-r--r--';
-        const d = new Date(file.mtime * 1000);
-        const dateStr = `${d.getFullYear()}-${(d.getMonth() + 1)
-          .toString()
-          .padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')}`;
-
-        return {
-          filename: file.name,
-          longname: `${perms} 1 user group ${file.size} ${dateStr} ${file.name}`,
-          attrs: {
-            size: file.size,
-            mtime: file.mtime,
-            atime: file.atime,
-            mode: file.mode,
-            uid: file.uid,
-            gid: file.gid,
-          },
-        };
-      });
-
+      entry.files = [...dotEntries, ...realFiles]
       entry.dirIndex = 0;
     }
 
@@ -792,11 +717,12 @@ async function processReadDirQueue(entry: SftpHandleEntry, key: string, self: Sf
 
       const end = Math.min(entry.dirIndex + self.netConfig.batchSize, entry.files.length);
       const batch = entry.files.slice(entry.dirIndex, end);
+      const items = batch.map(x => x.convertTo('sftp'))
       entry.dirIndex = end;
 
-      logger.info('SFTP', 'READDIR', `batch for handle=${key}: ${batch.length} entries`);
+      logger.debug('SFTP', 'READDIR', `batch for handle=${key}: ${batch.length} entries`);
 
-      self.sftpStream.name(reqid, batch);
+      self.sftpStream.name(reqid, items);
 
       // If there are still pending requests, yield so other I/O can run
       if (entry.dirPendingReqs.length > 0)
@@ -822,7 +748,6 @@ async function processReadDirQueue(entry: SftpHandleEntry, key: string, self: Sf
     entry.dirBusy = false;
   }
 }
-
 function getHandleKey(handle: Buffer | string): string // Handles are ASCII hex strings, sent as ASCII buffers
 {
   if (Buffer.isBuffer(handle))
@@ -844,6 +769,31 @@ function normalizePath(p: string): string
   const absPath = normalized.replace(/^\/+|\/+$/g, '');
   return '/' + absPath;
 }
+function createFileAttributes(size: number): Attributes
+{
+  const now = Date.now() / 1000;
+  return {
+    mode: 0o100644,
+    uid: 0,
+    gid: 0,
+    size: size,
+    atime: now,
+    mtime: now
+  }
+}
+function createFolderAttributes(): Attributes
+{
+  const now = Date.now() / 1000;
+  return {
+    mode: 0o040755,
+    uid: 0,
+    gid: 0,
+    size: 0,
+    mtime: now,
+    atime: now
+  }
+}
+
 // #endregion
 
 // #region Interfaces
@@ -867,27 +817,13 @@ export interface SftpConnectionConfig
   batchSize: number
 }
 
-export interface SftpItemEntry
-{
-  filename: string;
-  longname: string;
-  attrs: {
-    size: number;
-    mtime: number;
-    atime: number;
-    mode: number;
-    uid: number;
-    gid: number;
-  };
-}
-
 export interface SftpHandleEntry
 {
   path: string;
   intendedName: string;
   directoryEntryRead: boolean | null;
 
-  files?: SftpItemEntry[];
+  files?: VirtualMetadata[];
   dirIndex?: number;
   dirPendingReqs?: number[];
   dirBusy?: boolean;

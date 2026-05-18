@@ -44,6 +44,7 @@ export class Config
   TZ: string
   readBatchSize: number
   localFilesMode: boolean
+  maxConcurrentDownloads: number
 
 
   constructor()
@@ -85,6 +86,7 @@ export class Config
     this.TZ = getEnvOrDefault('TZ', 'UTC');
     this.readBatchSize = getEnvNumber('READ_BATCH_SIZE', 50);
     this.localFilesMode = getEnvBoolean('LOCAL_FILES_MODE', false);
+    this.maxConcurrentDownloads = getEnvNumber('MAX_CONCURRENT_DOWNLOADS', 6);
   }
 };
 
@@ -92,7 +94,6 @@ export class UserScopedConfig
 {
   subAlbumSeperator: string = " / "
   assetFileNamePattern: AssetFileNamePattern = 'original'
-  assetDownloadSource: AssetDownloadSource = 'original'
   enableTagsFolder: boolean = true
 
   static readonly DEFAULTS: UserScopedConfig = this.load_defaults()
@@ -105,7 +106,6 @@ export class UserScopedConfig
     const result = new UserScopedConfig()
     result.subAlbumSeperator = getEnvOrDefault('SUB_ALBUM_SEPERATOR', result.subAlbumSeperator);
     result.assetFileNamePattern = envFileNamePattern ?? result.assetFileNamePattern;
-    result.assetDownloadSource = envDownloadSource ?? result.assetDownloadSource;
     result.enableTagsFolder = getEnvBoolean('ENABLE_TAGS_FOLDER_DEFAULT', true);
 
     return result
@@ -141,13 +141,11 @@ export class UserScopedConfig
     const yaml = this.read_yaml(content, path)
 
     const envFileNamePattern = parseAssetFileNamePattern(getOptionalNestedString(yaml, ['assetFileNamePattern']));
-    const envDownloadSource = parseAssetDownloadSource(getOptionalNestedString(yaml, ['assetDownloadSource']));
     const envEnableTagsFolder = getOptionalNestedBoolean(yaml, ['enableTagsFolder'])
     const envSubAlbumSeperator = getOptionalNestedString(yaml, ['subAlbumSeperator'])
 
     const user_result = new UserScopedConfig()
     user_result.assetFileNamePattern = envFileNamePattern ?? this.DEFAULTS.assetFileNamePattern
-    user_result.assetDownloadSource = envDownloadSource ?? this.DEFAULTS.assetDownloadSource
     user_result.enableTagsFolder = envEnableTagsFolder ?? this.DEFAULTS.enableTagsFolder
     user_result.subAlbumSeperator = envSubAlbumSeperator ?? this.DEFAULTS.subAlbumSeperator
     return user_result
