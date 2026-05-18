@@ -23,6 +23,27 @@ export class VirtualFsUtils
             parts.push(p);
         }
 
+        // Fast path: traverse purely from cache when every level is already built.
+        // This avoids N sequential async roundtrips for the common case where the
+        // tree is warm (e.g. the second resolvePath call during a rename/move).
+        let fastCurrent: VirtualDirectory = root;
+        let fastOk = true;
+
+        for (let i = 0; i < parts.length - 1 && fastOk; i++)
+        {
+            const r = fastCurrent.tryNodeFromCache(parts[i]);
+            if (!r.hit || !r.node?.isDir()) { fastOk = false; break; }
+            fastCurrent = r.node as VirtualDirectory;
+        }
+
+        if (fastOk)
+        {
+            const name = parts[parts.length - 1];
+            const r = fastCurrent.tryNodeFromCache(name);
+            if (r.hit) return { parent: fastCurrent, node: r.node ?? null, name };
+        }
+
+        // Slow path: one or more levels not cached yet — resolve async, populating the cache.
         let current: VirtualDirectory = root;
 
         for (let i = 0; i < parts.length - 1; i++)

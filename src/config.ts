@@ -42,6 +42,7 @@ export class Config
 
   // server settings
   TZ: string
+  validateUploads: boolean
   readBatchSize: number
   localFilesMode: boolean
   maxConcurrentDownloads: number
@@ -85,6 +86,7 @@ export class Config
 
     // server settings
     this.TZ = getEnvOrDefault('TZ', 'UTC');
+    this.validateUploads = getEnvBoolean('VALIDATE_FILE_UPLOADS', true);
     this.readBatchSize = getEnvNumber('READ_BATCH_SIZE', 50);
     this.localFilesMode = getEnvBoolean('LOCAL_FILES_MODE', false);
     this.maxConcurrentDownloads = getEnvNumber('MAX_CONCURRENT_DOWNLOADS', 6);

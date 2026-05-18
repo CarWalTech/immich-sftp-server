@@ -152,7 +152,7 @@ export class ImmichSessionCache
                 this.albumsTree.set(cacheKey, { data, updatedAt });
 
                 const album = data?.album ?? undefined;
-                if (album) this.albumsMap.set(cacheKey, cacheKey);
+                if (album) this.albumsMap.set(album.id, cacheKey);
 
                 return data;
             }
@@ -162,7 +162,7 @@ export class ImmichSessionCache
             this.albumsTree.set(cacheKey, { data, updatedAt: Date.now().toString() });
 
             const album = data?.album ?? undefined;
-            if (album) this.albumsMap.set(cacheKey, cacheKey);
+            if (album) this.albumsMap.set(album.id, cacheKey);
 
             return data;
         })();
@@ -196,12 +196,18 @@ export class ImmichSessionCache
             if (path)
             {
                 this.albumsTree.delete(path)
+                this.assetTree.delete(path)
             }
         }
     }
+    public invalidateAssetList(fullpath: string)
+    {
+        this.assetTree.delete(fullpath);
+    }
     public invalidateTree()
     {
-        this.invalidateAlbums()
+        this.assetTree.clear();
+        this.invalidateAlbums();
     }
     public invalidateAll()
     {

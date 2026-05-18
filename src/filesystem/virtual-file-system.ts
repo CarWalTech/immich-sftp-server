@@ -8,6 +8,12 @@ export interface VirtualFileBuffer
     buffer: Buffer
 }
 
+export interface VFSResponse<T>
+{
+    success: boolean
+    contents?: T
+}
+
 // Interface: VirtualFileSystem
 export interface VirtualFileSystem
 {
@@ -15,7 +21,7 @@ export interface VirtualFileSystem
     listFiles(currentDir: string): Promise<Array<VirtualMetadata>>;
     readFile(filename: string): Promise<VirtualContentBuffer>;
     writeFile(filename: string, tmpFile: VirtualContentBuffer): Promise<void>;
-    stat(filename: string): Promise<VirtualMetadata>;
+    stat(filename: string): Promise<VFSResponse<VirtualMetadata>>;
     rename(oldName: string, newName: string): Promise<boolean>;
     remove(filename: string): Promise<boolean>;
     mkdir(path: string): Promise<boolean>;

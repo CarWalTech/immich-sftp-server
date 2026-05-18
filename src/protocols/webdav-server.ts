@@ -263,8 +263,8 @@ class ImmichWebdavFileSystem extends webdav.FileSystem
     backend.stat(p)
       .then(stat =>
       {
-        if (!stat) return cb(webdav.Errors.ResourceNotFound);
-        cb(undefined, stat.isDir ? webdav.ResourceType.Directory : webdav.ResourceType.File);
+        if (!stat || !stat.contents) return cb(webdav.Errors.ResourceNotFound);
+        cb(undefined, stat.contents.isDir ? webdav.ResourceType.Directory : webdav.ResourceType.File);
       })
       .catch(err => cb(err));
   }
@@ -299,8 +299,8 @@ class ImmichWebdavFileSystem extends webdav.FileSystem
     backend.stat(p)
       .then(stat =>
       {
-        if (!stat) return cb(webdav.Errors.ResourceNotFound);
-        cb(undefined, stat.size);
+        if (!stat || !stat.contents) return cb(webdav.Errors.ResourceNotFound);
+        cb(undefined, stat.contents.size);
       })
       .catch(err => cb(err));
   }
@@ -315,8 +315,8 @@ class ImmichWebdavFileSystem extends webdav.FileSystem
     backend.stat(p)
       .then(stat =>
       {
-        if (!stat) return cb(webdav.Errors.ResourceNotFound);
-        cb(undefined, stat.mtime * 1000);
+        if (!stat || !stat.contents) return cb(webdav.Errors.ResourceNotFound);
+        cb(undefined, stat.contents.mtime * 1000);
       })
       .catch(err => cb(err));
   }

@@ -26,7 +26,7 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
 
     constructor(file_system: ImmichFileSystem, albums_root: ImmichAlbumsDirectory, parent: ImmichAlbumsDirectory | ImmichAlbumFolder, node: ImmichAlbumsDirectoryNode)
     {
-        super(file_system, node.fsName, undefined, parent, { sendFn: canSendFileTo, recieveFn: canRecieveFileFrom, refreshOnMove: true })
+        super(file_system, node.fsName, undefined, parent, { sendFn: canSendFileTo, recieveFn: canRecieveFileFrom, refreshOnMove: true, refreshOnReadDir: true })
         this.node_data = node
         this.albums_root = albums_root
     }
@@ -38,10 +38,7 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
     }
     public get_album_realname()
     {
-        let album_real_name;
-        if (this.node_data.album) album_real_name = this.node_data.album.albumName
-        else album_real_name = this.node_data.rawName
-        return album_real_name
+        return this.node_data.rawName;
     }
     public get_album_fullname()
     {
@@ -111,7 +108,8 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
         }
 
         await this.file_system.memory.push(filename, this.fullpath, contents, album)
-        this.file_system.getCache().invalidateAlbumContents([album.id])
+        this.file_system.getCache().invalidateAssetList(this.fullpath);
+        super.refresh();
         return true;
     }
     async event_stat(): Promise<VirtualMetadata>
@@ -165,6 +163,7 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
             const asset = (item as ImmichVirtualAssetFile)
             const album = (this.node_data.album as ImmichAlbumDirectoryInfo)
             await this.file_system.getApi().SERVER_DeleteAssetFromAlbumOnly(album, asset.asset_id)
+            this.file_system.getCache().invalidateAssetList(this.fullpath);
             return true
         }
         else
@@ -177,9 +176,21 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
         if (item instanceof ImmichVirtualAssetFile)
         {
             const asset = (item as ImmichVirtualAssetFile)
-            const album = (this.node_data.album as ImmichAlbumDirectoryInfo)
-            await this.file_system.getApi().SERVER_AddAssetToAlbum(album, asset.asset_id)
-            return true
+            if (this.get_album_data().album)
+            {
+                const album = (this.node_data.album as ImmichAlbumDirectoryInfo)
+                await this.file_system.getApi().SERVER_AddAssetToAlbum(album.id, asset.asset_id)
+            }
+            else
+            {
+                const albumId = await this.file_system.getApi().SERVER_CreateAlbum(this.get_album_fullname());
+                await this.file_system.getApi().SERVER_AddAssetToAlbum(albumId, asset.asset_id)
+            }
+            // Drop cached asset list and force _child_nodes rebuild so the
+            // destination shows the newly received file immediately.
+            this.file_system.getCache().invalidateAssetList(this.fullpath);
+            super.refresh();
+            return true;
         }
         else
         {

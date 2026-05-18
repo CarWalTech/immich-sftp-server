@@ -37,15 +37,7 @@ export function canSendAssetTo(item: ImmichVirtualAssetFile, container: VirtualD
 {
     if (container instanceof ImmichAlbumFolder)
     {
-        if (container.get_album_data().album === undefined)
-        {
-            logger.warn('ImmichFsUtils', 'canSendFileTo', "Can't move files from virtual albums yet!")
-            return false
-        }
-        else 
-        {
-            return true
-        }
+        return true;
 
     }
     else if (container instanceof ImmichRootTrashDirectory)

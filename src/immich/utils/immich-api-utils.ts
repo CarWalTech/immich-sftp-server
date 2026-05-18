@@ -6,7 +6,6 @@ import { ImmichVirtualAssetFile } from "../collections/immich-virtual-asset-file
 import { ImmichAPI } from "../immich-api";
 import { ImmichAsset, ImmichAssetUtils } from "./immich-asset-utils";
 import { logger } from "../../logger";
-import { ImmichTagFolder } from "../collections/immich-tag-folder";
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
 
 export interface ImmichAlbumUser
@@ -337,18 +336,19 @@ export function mapAssetFromApi(asset: any): ImmichAsset
 }
 export function mapFilesFromAssets(assets: ImmichAsset[], parent: ImmichVirtualDirectory, reserved_names?: Set<string>): ImmichVirtualAssetFile[]
 {
-    function buildUniqueName(base: string, reserved: Set<string>, nameCount: Map<string, number>): string
+    function buildUniqueName(base: string, extension: string, reserved: Set<string>, nameCount: Map<string, number>): string
     {
+        const actual_name = base + extension
         // Reserved → force collision immediately
-        if (reserved.has(base))
+        if (reserved.has(actual_name))
         {
-            const count = nameCount.get(base) ?? 0;
-            nameCount.set(base, count + 1);
-            return `${base} (${count + 1})`;
+            const count = nameCount.get(actual_name) ?? 0;
+            nameCount.set(actual_name, count + 1);
+            return `${base} (${count + 1})${extension}`;
         }
 
         // Normal collision logic
-        let finalName = base;
+        let finalName = actual_name;
         let count = nameCount.get(finalName) ?? 0;
 
         if (count > 0)
@@ -356,11 +356,11 @@ export function mapFilesFromAssets(assets: ImmichAsset[], parent: ImmichVirtualD
             do
             {
                 count++;
-                finalName = `${base} (${count})`;
+                finalName = `${base} (${count})${extension}`;
             } while (reserved.has(finalName));
         }
 
-        nameCount.set(base, count + 1);
+        nameCount.set(actual_name, count + 1);
         return finalName;
     }
 
@@ -371,7 +371,8 @@ export function mapFilesFromAssets(assets: ImmichAsset[], parent: ImmichVirtualD
     for (let i = 0; i < assets.length; i++)
     {
         const asset = assets[i];
-        const finalName = buildUniqueName(parent.file_system.getApi().getAssetDisplayName(asset), reservedNames, nameCount);
+        const [name, ext] = parent.file_system.getApi().getAssetDisplayName(asset);
+        const finalName = buildUniqueName(name, ext, reservedNames, nameCount);
         files[i] = new ImmichVirtualAssetFile(asset, finalName, parent, parent.file_system);
     }
 
