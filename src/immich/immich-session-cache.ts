@@ -1,15 +1,6 @@
-import { dirname } from "path";
-import { VirtualNode } from "../filesystem/virtual-node";
 import { ImmichVirtualAssetFile } from "./collections/immich-virtual-asset-file";
 import { ImmichAlbumDirectoryInfo, ImmichAlbumsDirectoryNode, ImmichUser } from "./utils/immich-api-utils";
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
-import { ImmichAsset } from "./utils/immich-asset-utils";
-import { VirtualFile } from "webdav-server";
-import { VirtualPathInfo } from "../filesystem/virtual-path-info";
-import { ImmichAlbumsDirectory } from "./collections/immich-albums-directory";
-import { ImmichRootTrashDirectory } from "./collections/immich-root-commons";
-import { ImmichAlbumFolder } from "./collections/immich-album-folder";
-import { VirtualDirectory } from "../filesystem/virtual-directory";
 
 export interface ImmichCachedEntry<T>
 {
@@ -47,6 +38,12 @@ export class ImmichSessionCache
     assetTree: Map<string, ImmichCachedEntry<ImmichVirtualAssetFile[]>>;
     albumsTree: Map<string, ImmichCachedEntry<ImmichAlbumsDirectoryNode | undefined>>;
 
+    // Deduplication maps: when multiple connections request the same directory
+    // simultaneously (e.g. Dolphin thumbnail workers), they all share one in-flight
+    // fetch rather than each issuing their own redundant API calls.
+    private inFlightListFetches: Map<string, Promise<ImmichVirtualAssetFile[]>> = new Map();
+    private inFlightTreeFetches: Map<string, Promise<ImmichAlbumsDirectoryNode | undefined>> = new Map();
+
     private static _instances: Map<string, ImmichSessionCache> = new Map();
 
     constructor()
@@ -80,69 +77,73 @@ export class ImmichSessionCache
 
     public async fetchedCachedAssetLists(cacheKey: string, { fetchMeta, fetchData }: ImmichAssetCacheFetchArgs): Promise<ImmichVirtualAssetFile[]>
     {
-        const cached = this.assetTree.get(cacheKey);
+        // If another connection is already fetching this directory, join that
+        // promise rather than firing a redundant parallel API call.
+        const inflight = this.inFlightListFetches.get(cacheKey);
+        if (inflight) return inflight;
 
-        // 1. If cached, validate metadata
-        if (cached && fetchMeta)
+        const promise = (async () =>
         {
-            try
+            const cached = this.assetTree.get(cacheKey);
+
+            if (cached && fetchMeta)
             {
-                const meta = await fetchMeta();
-                if (meta.updatedAt && meta.updatedAt === cached.updatedAt)
+                try
                 {
-                    return cached.data;
-                }
-            } catch (_)
-            {
-                // If metadata fetch fails, fall through to full fetch
+                    const meta = await fetchMeta();
+                    if (meta.updatedAt && meta.updatedAt === cached.updatedAt)
+                    {
+                        return cached.data;
+                    }
+                } catch (_) { }
             }
-        }
 
-        // 2. Fetch full data
-        const data = await fetchData();
+            const data = await fetchData();
+            const updatedAt = (data as any)?.updatedAt ?? Date.now().toString();
+            const checksum = (data as any)?.checksum;
+            this.assetTree.set(cacheKey, { data, updatedAt, checksum });
+            return data;
+        })();
 
-        // 3. Store in cache
-        const updatedAt = (data as any)?.updatedAt ?? Date.now().toString();
-        const checksum = (data as any)?.checksum;
-
-        this.assetTree.set(cacheKey, { data, updatedAt, checksum });
-
-        return data;
+        this.inFlightListFetches.set(cacheKey, promise);
+        promise.finally(() => this.inFlightListFetches.delete(cacheKey));
+        return promise;
     }
-    public async fetchCachedAlbumTree(cacheKey: string, { fetchMeta, fetchData, }: ImmichTreeCacheFetchArgs): Promise<ImmichAlbumsDirectoryNode | undefined>
+    public async fetchCachedAlbumTree(cacheKey: string, { fetchMeta, fetchData }: ImmichTreeCacheFetchArgs): Promise<ImmichAlbumsDirectoryNode | undefined>
     {
-        const cached = this.albumsTree.get(cacheKey);
+        const inflight = this.inFlightTreeFetches.get(cacheKey);
+        if (inflight) return inflight;
 
-        // 1. If cached, validate metadata
-        if (cached && fetchMeta)
+        const promise = (async () =>
         {
-            try
+            const cached = this.albumsTree.get(cacheKey);
+
+            if (cached && fetchMeta)
             {
-                const meta = await fetchMeta();
-                if (meta.updatedAt && meta.updatedAt === cached.updatedAt)
+                try
                 {
-                    return cached.data;
-                }
-            } catch (_)
-            {
-                // If metadata fetch fails, fall through to full fetch
+                    const meta = await fetchMeta();
+                    if (meta.updatedAt && meta.updatedAt === cached.updatedAt)
+                    {
+                        return cached.data;
+                    }
+                } catch (_) { }
             }
-        }
 
-        // 2. Fetch full data
-        const data = await fetchData();
+            const data = await fetchData();
+            const updatedAt = (data as any)?.updatedAt ?? Date.now().toString();
+            const checksum = (data as any)?.checksum;
+            this.albumsTree.set(cacheKey, { data, updatedAt, checksum });
 
-        // 3. Store in cache
-        const updatedAt = (data as any)?.updatedAt ?? Date.now().toString();
-        const checksum = (data as any)?.checksum;
+            const album = data?.album ?? undefined;
+            if (album) this.albumsMap.set(cacheKey, cacheKey);
 
-        this.albumsTree.set(cacheKey, { data, updatedAt, checksum });
+            return data;
+        })();
 
-        const album = data?.album ?? undefined
-
-        if (album) this.albumsMap.set(cacheKey, cacheKey);
-
-        return data;
+        this.inFlightTreeFetches.set(cacheKey, promise);
+        promise.finally(() => this.inFlightTreeFetches.delete(cacheKey));
+        return promise;
     }
 
     public invalidateAssets(assetIds: string[])
@@ -150,6 +151,8 @@ export class ImmichSessionCache
         for (const id of assetIds)
         {
             this.assetFileSizes.delete(id);
+            const buf = this.assetFileBuffers.get(id);
+            if (buf?.isTmp) buf.removeCallback();
             this.assetFileBuffers.delete(id);
         }
     }
@@ -175,6 +178,10 @@ export class ImmichSessionCache
     }
     public invalidateAll()
     {
+        for (const buf of this.assetFileBuffers.values())
+        {
+            if (buf.isTmp) buf.removeCallback();
+        }
         this.assetTree.clear();
         this.assetFileBuffers.clear();
         this.assetFileSizes.clear();

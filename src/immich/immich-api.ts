@@ -26,11 +26,9 @@ import { ImmichVirtualAssetFile } from './collections/immich-virtual-asset-file'
 import { ImmichAlbumFolder } from './collections/immich-album-folder';
 import { ImmichVirtualDirectory } from './collections/immich-virtual-directory';
 
-// Maximum number of simultaneous asset downloads per session.
-// Dolphin and similar clients open many files concurrently for thumbnailing;
-// without a cap every file in a directory triggers a download at once,
-// which exhausts bandwidth, memory, and the 30-second axios timeout.
-const MAX_CONCURRENT_DOWNLOADS = 6;
+// Default simultaneous download cap — overridden by MAX_CONCURRENT_DOWNLOADS env var.
+// Raising this speeds up thumbnail-heavy directories; lower it on bandwidth-constrained hosts.
+const DEFAULT_MAX_CONCURRENT_DOWNLOADS = 6;
 
 // Files larger than this threshold are written to a temp file on disk
 // instead of being collected into a heap Buffer.
@@ -77,15 +75,13 @@ export class ImmichAPI
     private userSettings: UserScopedConfig;
     private userDisplaySettings: UserDisplaySettings | null = null;
     private shouldLogoutSession = false;
-    private assetFileNamePattern: string = ""
     private readonly baseUrl;
-    private readonly downloadSemaphore = new DownloadSemaphore(MAX_CONCURRENT_DOWNLOADS);
+    private readonly downloadSemaphore = new DownloadSemaphore(config.maxConcurrentDownloads || DEFAULT_MAX_CONCURRENT_DOWNLOADS);
 
     constructor(immich_url: string)
     {
         this.baseUrl = immich_url;
         this.userSettings = loadSettingsForUser();
-        this.assetFileNamePattern = this.userSettings.assetFileNamePattern;
     }
 
     // #region User Authentication
@@ -206,7 +202,7 @@ export class ImmichAPI
         const formattedTimestamp = `${dt.toFormat('yyyyLLdd_HHmmss')}${String(dt.millisecond).padStart(3, '0')}`;
         const shortId = asset.id.slice(0, 8);
 
-        switch (this.assetFileNamePattern)
+        switch (this.userSettings.assetFileNamePattern)
         {
             case 'assetUuid':
                 return `${asset.id}${extension}`;
@@ -809,6 +805,15 @@ export class ImmichAPI
         const cached = this.cache.assetFileSizes.get(asset.id);
         if (cached !== undefined) return cached;
 
+        if (config.localFilesMode)
+        {
+            const filepath = "/immich" + asset.originalPath;
+            const stats = fs.statSync(filepath)
+            const size = stats.size
+            this.cache.assetFileSizes.set(asset.id, size);
+            return size;
+        }
+
         let response = await this.callApi({
             method: 'POST',
             endpoint: 'download/info',
@@ -817,7 +822,6 @@ export class ImmichAPI
         });
 
         const size = Number(response?.totalSize ?? 0);
-
         this.cache.assetFileSizes.set(asset.id, size);
         return size;
     }
@@ -866,9 +870,7 @@ export class ImmichAPI
         }
 
         // 3. Determine endpoint
-        const endpoint = this.userSettings.assetDownloadSource === 'preview'
-            ? `assets/${asset.id}/thumbnail`
-            : `assets/${asset.id}/original`;
+        const endpoint = `assets/${asset.id}/original`;
 
         // 4. Acquire slot — prevents a directory full of files from all downloading
         //    simultaneously, which exhausts bandwidth and triggers the 30s timeout.
@@ -919,8 +921,13 @@ export class ImmichAPI
             this.downloadSemaphore.release();
         }
 
-        // 6. Cache so repeated reads (e.g. thumbnail then full view) hit memory.
-        this.cache.assetFileBuffers.set(asset.id, node);
+        // 6. Only cache buffer-backed nodes. Tmp-backed large-file nodes must NOT be cached
+        //    because SFTP_CLOSE calls removeCallback() to clean up the tmp file; a stale
+        //    cache entry pointing at a deleted tmp file causes read failures on re-open.
+        if (node.isBuffer)
+        {
+            this.cache.assetFileBuffers.set(asset.id, node);
+        }
 
         return node;
     }
