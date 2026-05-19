@@ -1,6 +1,6 @@
 import { ImmichVirtualAssetFile } from "./collections/immich-virtual-asset-file";
 import { ImmichAlbumDirectoryInfo, ImmichAlbumsDirectoryNode, ImmichUser } from "./utils/immich-api-utils";
-import { ImmichAsset } from "./utils/immich-asset-utils";
+import { ImmichAsset } from "./utils/immich-api-utils";
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
 
 export interface ImmichCachedEntry<T>

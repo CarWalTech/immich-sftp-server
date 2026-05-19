@@ -4,7 +4,6 @@ import { ImmichAlbumFolder } from "../collections/immich-album-folder";
 import { ImmichVirtualDirectory } from "../collections/immich-virtual-directory";
 import { ImmichVirtualAssetFile } from "../collections/immich-virtual-asset-file";
 import { ImmichAPI } from "../immich-api";
-import { ImmichAsset, ImmichAssetUtils } from "./immich-asset-utils";
 import { logger } from "../../logger";
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
 
@@ -19,6 +18,18 @@ export interface ImmichUser
     id: string;
     username: string;
     email?: string;
+}
+export interface ImmichAsset
+{
+    id: string;
+    originalFileName: string;
+    originalPath: string;
+    createdAt?: string;
+    updatedAt?: string;
+    fileCreatedAt: string;
+    fileModifiedAt: string;
+    fileSizeInByte: number;
+    isTrashed: boolean;
 }
 export interface ImmichAlbumApiResponse
 {
@@ -435,6 +446,7 @@ export function extractUsername(user: Record<string, unknown>): string
 {
     return String(user.name ?? user.username ?? user.email ?? user.id ?? '').trim();
 }
+
 
 
 
