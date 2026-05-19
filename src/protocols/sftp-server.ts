@@ -10,6 +10,7 @@ import { TransferProtocolServer } from './transfer-protocol-server';
 import { VirtualMetadata } from '../filesystem/virtual-metadata';
 import { logger } from '../logger';
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
+import { DateUtils } from '../utils/date-utils';
 
 // #region TCP Receivers
 
@@ -862,7 +863,7 @@ function normalizePath(p: string): string
 }
 function createFileAttributes(size: number): Attributes
 {
-  const now = Date.now() / 1000;
+  const now = DateUtils.getTimestampNow();
   return {
     mode: 0o100644,
     uid: 0,
@@ -874,7 +875,7 @@ function createFileAttributes(size: number): Attributes
 }
 function createFolderAttributes(): Attributes
 {
-  const now = Date.now() / 1000;
+  const now = DateUtils.getTimestampNow();
   return {
     mode: 0o040755,
     uid: 0,

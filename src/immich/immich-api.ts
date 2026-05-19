@@ -11,7 +11,7 @@ import { ImmichAlbumDirectoryInfo, ImmichTagDirectoryInfo, ImmichTag, mapTagFrom
 import { config, UserConfigLoader, UserConfig } from "../config";
 import { PathUtils } from "../utils/path-utils";
 import { AlbumMetadataDocumentUtils } from "./utils/immich-metadata-utils";
-import { StringUtils } from "../utils/string-utils";
+import { StringUtils2 } from "../utils/string-utils";
 import { pipeline } from 'stream/promises';
 import { Readable } from "stream";
 import { DateTime } from 'luxon';
@@ -24,6 +24,7 @@ import { ImmichCachedEntry, ImmichSessionCache } from './immich-session-cache';
 import { ImmichVirtualAssetFile } from './collections/immich-virtual-asset-file';
 import { ImmichAlbumFolder } from './collections/immich-album-folder';
 import { ImmichVirtualDirectory } from './collections/immich-virtual-directory';
+import { DateUtils } from '../utils/date-utils';
 
 /**
  * Lightweight counting semaphore for concurrency control.
@@ -96,7 +97,7 @@ export class ImmichAPI
                 skipResponseLog: true,
             });
             this.currentUser = extractCurrentUser(me, 'api-key');
-            const userId = StringUtils.getTrimmedString(this.currentUser?.id);
+            const userId = StringUtils2.getTrimmedString(this.currentUser?.id);
             this.userSettings = UserConfigLoader.load_user_or_default(userId || undefined);
             return;
         }
@@ -125,7 +126,7 @@ export class ImmichAPI
             await this.initUser(trimmedUsername);
         }
 
-        const userId = StringUtils.getTrimmedString(this.currentUser?.id);
+        const userId = StringUtils2.getTrimmedString(this.currentUser?.id);
         this.userSettings = UserConfigLoader.load_user_or_default(userId || undefined);
     }
     public async logout(): Promise<void>
@@ -216,7 +217,7 @@ export class ImmichAPI
     {
         try
         {
-            logger.debug(`ImmichAPI`, `${logAction}`, `Sending: ${method} /api/${endpoint}`);
+            logger.explicit(`ImmichAPI`, `${logAction}`, `Sending: ${method} /api/${endpoint}`);
 
             const isDownload = method === 'GET' && endpoint.startsWith('assets/') && (endpoint.endsWith('/original') || endpoint.endsWith('/thumbnail'));
 
@@ -241,10 +242,10 @@ export class ImmichAPI
             });
 
 
-            //if (skipResponseLog == true)
-            logger.debug(`ImmichAPI`, `${logAction}`, `Received (${logAction}):`, response.status, '[Data skipped]');
-            //else
-            //logger.info(`ImmichAPI`, `${logAction}`, `Received:`, response.status, this.filterLogData(response.data));
+            if (skipResponseLog == true)
+                logger.explicit(`ImmichAPI`, `${logAction}`, `Received (${logAction}):`, response.status, '[Data skipped]');
+            else
+                logger.explicit(`ImmichAPI`, `${logAction}`, `Received:`, response.status, this.filterLogData(response.data));
             return response.data;
         }
         catch (restoreError)
@@ -427,13 +428,11 @@ export class ImmichAPI
         return await this.cache.fetchedCachedAssetLists(cacheKey, {
             fetchData: async () =>
             {
-                const normal_items = await this.FETCH_AssetsByMetadata({ isNotInAlbum: true })
-                const archived_items = await this.FETCH_AssetsByMetadata({ isNotInAlbum: true, visibility: "archive" })
-                return [...normal_items, ...archived_items];
+                return await this.FETCH_AssetsByMetadata({ isNotInAlbum: true }, { isNotInAlbum: true, visibility: "archive" })
             },
             fetchMeta: async () =>
             {
-                return { updatedAt: DateTime.now().toJSDate().toISOString() }
+                return { updatedAt: DateUtils.getTimeStringNowISO() }
             },
             buildFiles: (assets) => mapFilesFromAssets(assets, parent, reserved_names)
         });
@@ -445,13 +444,12 @@ export class ImmichAPI
         return await this.cache.fetchedCachedAssetLists(cacheKey, {
             fetchData: async () =>
             {
-                const normal_items = await this.FETCH_AssetsByMetadata({ trashedBefore: DateTime.now().toJSDate().toISOString() })
-                const archived_items = await this.FETCH_AssetsByMetadata({ trashedBefore: DateTime.now().toJSDate().toISOString(), visibility: "archive" })
-                return [...normal_items, ...archived_items];
+                const earliestTime = DateUtils.getEarliestTimeStringISO();
+                return await this.FETCH_AssetsByMetadata({ trashedAfter: earliestTime }, { trashedAfter: earliestTime, visibility: "archive" })
             },
             fetchMeta: async () =>
             {
-                return { updatedAt: DateTime.now().toJSDate().toISOString() }
+                return { updatedAt: DateUtils.getTimeStringNowISO() }
             },
             buildFiles: (assets) => mapFilesFromAssets(assets, parent, reserved_names)
         });
@@ -482,10 +480,7 @@ export class ImmichAPI
                 });
 
                 applyAlbumDetails(album, response);
-
-                const normal_items = await this.FETCH_AssetsByMetadata({ albumIds: [album.id], visibility: "timeline", withDeleted: false })
-                const archived_items = await this.FETCH_AssetsByMetadata({ albumIds: [album.id], visibility: "archive", withDeleted: false })
-                return [...normal_items, ...archived_items];
+                return await this.FETCH_AssetsByMetadata({ albumIds: [album.id], visibility: "timeline" }, { albumIds: [album.id], visibility: "archive" })
             },
             buildFiles: (assets) => mapFilesFromAssets(assets, parent, reserved_names)
         });
@@ -508,50 +503,49 @@ export class ImmichAPI
 
             fetchData: async () =>
             {
-                const normal_items = await this.FETCH_AssetsByMetadata({ tagIds: [tag.id], visibility: "timeline" })
-                const archived_items = await this.FETCH_AssetsByMetadata({ tagIds: [tag.id], visibility: "archive" })
-                return [...normal_items, ...archived_items];
+                return await this.FETCH_AssetsByMetadata({ tagIds: [tag.id], visibility: "timeline" }, { tagIds: [tag.id], visibility: "archive" })
             },
             buildFiles: (assets) => mapFilesFromAssets(assets, parent, reserved_names)
         });
     }
-    public async FETCH_AssetsByMetadata(query: { albumIds?: string[], visibility?: string, tagIds?: string[]; personIds?: string[], isNotInAlbum?: boolean, trashedAfter?: string, trashedBefore?: string, withDeleted?: boolean }): Promise<ImmichAsset[]>
+    public async FETCH_AssetsByMetadata(...queries: ImmichMetadataSearchArguments[]): Promise<ImmichAsset[]>
     {
         const byAssetId = new Map<string, ImmichAsset>();
-        let page = 1;
-
-        while (true)
+        for (const query of queries)
         {
-            const response = await this.callApi({
-                method: 'POST',
-                endpoint: 'search/metadata',
-                data: JSON.stringify({
-                    ...query,
-                    page,
-                    size: 1000,
-                    withDeleted: false,
-                    withExif: true,
-                }),
-                logAction: 'Search assets',
-                skipResponseLog: true,
-            });
-
-            const items = Array.isArray(response?.assets?.items) ? response.assets.items : [];
-            for (const item of items)
+            let page = 1;
+            while (true)
             {
-                const asset = mapAssetFromApi(item);
-                byAssetId.set(asset.id, asset);
-            }
+                const response = await this.callApi({
+                    method: 'POST',
+                    endpoint: 'search/metadata',
+                    data: JSON.stringify({
+                        ...query,
+                        page,
+                        size: 1000,
+                        withDeleted: false,
+                        withExif: true,
+                    }),
+                    logAction: 'Search assets',
+                    skipResponseLog: true,
+                });
 
-            const nextPageRaw = response?.assets?.nextPage;
-            const nextPage = typeof nextPageRaw === 'string' ? Number.parseInt(nextPageRaw, 10) : Number.NaN;
-            if (!Number.isInteger(nextPage) || nextPage <= page || items.length === 0)
-            {
-                break;
+                const items = Array.isArray(response?.assets?.items) ? response.assets.items : [];
+                for (const item of items)
+                {
+                    const asset = mapAssetFromApi(item);
+                    byAssetId.set(asset.id, asset);
+                }
+
+                const nextPageRaw = response?.assets?.nextPage;
+                const nextPage = typeof nextPageRaw === 'string' ? Number.parseInt(nextPageRaw, 10) : Number.NaN;
+                if (!Number.isInteger(nextPage) || nextPage <= page || items.length === 0)
+                {
+                    break;
+                }
+                page = nextPage;
             }
-            page = nextPage;
         }
-
         return Array.from(byAssetId.values());
     }
     public async FETCH_Tags(): Promise<ImmichTag[]>
@@ -996,6 +990,17 @@ export class ImmichAPI
     }
 
     // #endregion
+}
+
+export interface ImmichMetadataSearchArguments
+{
+    albumIds?: string[]
+    visibility?: string
+    tagIds?: string[]
+    personIds?: string[]
+    isNotInAlbum?: boolean
+    trashedAfter?: string
+    trashedBefore?: string
 }
 
 export interface ImmichUploadItem

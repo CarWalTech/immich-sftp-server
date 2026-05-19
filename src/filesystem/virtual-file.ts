@@ -4,6 +4,7 @@ import { VirtualNode } from "./virtual-node";
 import { VirtualContentBuffer } from "./virtual-content-buffer";
 import { VirtualMetadata } from './virtual-metadata';
 import { logger } from "../logger";
+import { DateUtils } from "../utils/date-utils";
 
 export class VirtualFile extends VirtualNode
 {
@@ -49,11 +50,7 @@ export class VirtualFile extends VirtualNode
     async event_stat(): Promise<VirtualMetadata>
     {
         const size = await this.get_size();
-        return VirtualMetadata.file_rw(
-            this.name,
-            size,
-            Math.floor(Date.now() / 1000)
-        );
+        return VirtualMetadata.file_rw(this.name, size, DateUtils.getTimestampNow());
     }
     async event_rename(new_name: string): Promise<boolean>
     {

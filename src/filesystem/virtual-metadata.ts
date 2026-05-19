@@ -1,4 +1,5 @@
 import { FileEntry } from "ssh2";
+import { DateUtils } from "../utils/date-utils";
 
 export class VirtualMetadata
 {
@@ -86,7 +87,7 @@ export class VirtualMetadata
     /** Regular file, read-write */
     public static file_rw(name: string, size: number, mtime?: number): VirtualMetadata
     {
-        if (!mtime) mtime = Date.now() / 1000
+        if (!mtime) mtime = DateUtils.getTimestampNow()
         return new VirtualMetadata(
             name,
             false,
@@ -103,7 +104,7 @@ export class VirtualMetadata
     /** Regular file, read-only */
     public static file_ro(name: string, size: number, mtime?: number): VirtualMetadata
     {
-        if (!mtime) mtime = Date.now() / 1000
+        if (!mtime) mtime = DateUtils.getTimestampNow()
         return new VirtualMetadata(
             name,
             false,
@@ -120,7 +121,7 @@ export class VirtualMetadata
     /** Directory, read-write */
     public static directory_rw(name: string, mtime?: number): VirtualMetadata
     {
-        if (!mtime) mtime = Date.now() / 1000
+        if (!mtime) mtime = DateUtils.getTimestampNow()
         return new VirtualMetadata(
             name,
             true,
@@ -136,7 +137,7 @@ export class VirtualMetadata
     /** Directory, read-only */
     public static directory_ro(name: string, mtime?: number): VirtualMetadata
     {
-        if (!mtime) mtime = Date.now() / 1000
+        if (!mtime) mtime = DateUtils.getTimestampNow()
         return new VirtualMetadata(
             name,
             true,
@@ -152,7 +153,7 @@ export class VirtualMetadata
     /** Unknown node type — safest fallback */
     public static unknown(name: string): VirtualMetadata
     {
-        const now = Math.floor(Date.now() / 1000);
+        const now = DateUtils.getTimestampNow()
         return new VirtualMetadata(
             name,
             false,

@@ -9,6 +9,7 @@ import { VirtualFileSystem } from '../filesystem/virtual-file-system';
 import { TransferProtocolServer } from './transfer-protocol-server';
 import { logger } from '../logger';
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
+import { DateUtils } from '../utils/date-utils';
 
 interface FtpStat
 {
@@ -46,7 +47,7 @@ class UploadToVirtualFileSystemStream extends Writable
       try
       {
         await this.fsBackend.writeFile(this.targetPath, new VirtualContentBuffer(this.tmpFile));
-        await this.fsBackend.setAttributes(this.targetPath, Math.floor(Date.now() / 1000));
+        await this.fsBackend.setAttributes(this.targetPath, DateUtils.getTimestampNow());
         this.completed = true;
         callback();
       } catch (error)

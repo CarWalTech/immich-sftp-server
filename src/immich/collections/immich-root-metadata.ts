@@ -43,7 +43,7 @@ export class ImmichRootMetadataFile extends VirtualFile
     async event_stat(): Promise<VirtualMetadata>
     {
         const metadata = UserConfigLoader.load_user_yaml(this.file_system.getCurrentUser()?.id)
-        return VirtualMetadata.file_rw(this.name, Buffer.byteLength(metadata, 'utf8'), DateUtils.getDateTimeNow());
+        return VirtualMetadata.file_rw(this.name, Buffer.byteLength(metadata, 'utf8'), DateUtils.getTimestampNow());
     }
     async event_readfile(): Promise<VirtualContentBuffer>
     {

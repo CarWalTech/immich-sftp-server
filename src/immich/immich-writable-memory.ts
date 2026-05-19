@@ -7,6 +7,7 @@ import { ImmichAlbumDirectoryInfo } from './utils/immich-api-utils';
 import path from "path";
 import { logger } from '../logger';
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
+import { DateUtils } from '../utils/date-utils';
 
 
 
@@ -156,7 +157,7 @@ export class ImmichWritableMemory
         const queueItem = this.entries[index];
         try
         {
-            await this.immich_fs.getApi().QUEUE_UploadFile(queueItem, Date.now() / 1000);
+            await this.immich_fs.getApi().QUEUE_UploadFile(queueItem, DateUtils.getTimestampNow());
         }
         finally
         {

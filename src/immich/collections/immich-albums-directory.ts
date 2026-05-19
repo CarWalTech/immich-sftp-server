@@ -9,6 +9,7 @@ import { ImmichAlbumFolder } from "./immich-album-folder";
 import { getVirtualAlbumTree, ImmichAlbumDirectoryInfo } from '../utils/immich-api-utils';
 import { ImmichAlbumsDirectoryNode } from "../utils/immich-api-utils";
 import { ImmichVirtualDirectory } from "./immich-virtual-directory";
+import { DateUtils } from "../../utils/date-utils";
 
 export class ImmichAlbumsDirectory extends ImmichVirtualDirectory
 {
@@ -19,7 +20,7 @@ export class ImmichAlbumsDirectory extends ImmichVirtualDirectory
 
     async event_stat(): Promise<VirtualMetadata>
     {
-        return VirtualMetadata.directory_ro(this.name, Math.floor(Date.now() / 1000))
+        return VirtualMetadata.directory_ro(this.name, DateUtils.getTimestampNow())
     }
     async event_mkdir(albumName: string): Promise<boolean>
     {
