@@ -423,8 +423,8 @@ export class WebdavProtocolServer implements TransferProtocolServer
   readonly name = 'webdav';
 
   private readonly server = new webdav.WebDAVServer({
-    port: config.webdavPort,
-    hostname: config.listenHost,
+    port: config.portWebDAV,
+    hostname: config.serverHost,
     requireAuthentification: true,
     httpAuthentication: new webdav.HTTPBasicAuthentication(
       new ImmichWebdavUserManager(),
@@ -444,7 +444,7 @@ export class WebdavProtocolServer implements TransferProtocolServer
           reject(new Error('WebDAV server failed to start'));
           return;
         }
-        logger.info(`WebDAV`, 'SERVER', `WebDAV server listening on ${config.listenHost}:${config.webdavPort}`);
+        logger.info(`WebDAV`, 'SERVER', `WebDAV server listening on ${config.serverHost}:${config.portWebDAV}`);
         resolve();
       });
     });

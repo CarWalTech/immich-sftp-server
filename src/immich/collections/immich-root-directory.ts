@@ -30,13 +30,6 @@ export class ImmichRootDirectory extends VirtualDirectory
         this.file_metadata = new ImmichRootMetadataFile(this.file_system, this)
     }
 
-    async event_list(): Promise<VirtualMetadata[]>
-    {
-        const visibility = await this.file_system.getUserDisplaySettings();
-        let rootEntries = await super.event_list()
-        return rootEntries;
-    }
-
     async event_delete(): Promise<boolean>
     {
         logger.error('ImmichVirtualRootDirectory', 'Delete', 'this directory is read-only');

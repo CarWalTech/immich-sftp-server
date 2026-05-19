@@ -1,3 +1,9 @@
+export interface NumberRange
+{
+    min: number
+    max: number
+}
+
 export function requireEnv(name: string): string
 {
     const val = process.env[name];
@@ -93,6 +99,23 @@ export function getEnvNumber(name: string, defaultValue: number): number
         throw new Error(`Invalid numeric environment variable ${name}: ${val}. Expected an integer in range 1-65535.`);
     }
     return parsed;
+}
+
+export function getOptionalEnvNumberRange(name_min: string, name_max: string): NumberRange | undefined
+{
+    const minVal = getOptionalEnvNumber(name_min);
+    const maxVal = getOptionalEnvNumber(name_max);
+
+    if ((minVal == null) !== (maxVal == null))
+        throw new Error(`${name_min} and ${name_max} must both be set or both be unset.`);
+
+    if (minVal != null && maxVal != null && minVal > maxVal)
+        throw new Error(`${name_min} must be less than or equal to ${name_max}.`);
+
+    if (minVal != undefined && maxVal != undefined)
+        return { min: minVal, max: maxVal }
+    else
+        return undefined
 }
 
 export function getOptionalEnvNumber(name: string): number | undefined

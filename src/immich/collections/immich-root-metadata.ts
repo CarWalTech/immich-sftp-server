@@ -16,7 +16,7 @@ import { ImmichAlbumFolder } from "./immich-album-folder";
 import { ImmichAlbumDirectoryInfo } from '../utils/immich-api-utils';
 import fs from 'fs';
 import { logger } from "../../logger";
-import { config, UserScopedConfig } from "../../config";
+import { config, UserConfigLoader, UserConfig } from "../../config";
 import { DateUtils } from "../../utils/date-utils";
 
 export class ImmichRootMetadataFile extends VirtualFile
@@ -43,19 +43,19 @@ export class ImmichRootMetadataFile extends VirtualFile
     }
     async event_stat(): Promise<VirtualMetadata>
     {
-        const metadata = UserScopedConfig.load_user_yaml(this.file_system.getCurrentUser()?.id)
+        const metadata = UserConfigLoader.load_user_yaml(this.file_system.getCurrentUser()?.id)
         return VirtualMetadata.file_rw(this.name, Buffer.byteLength(metadata, 'utf8'), DateUtils.getDateTimeNow());
     }
     async event_readfile(): Promise<VirtualContentBuffer>
     {
-        const metadata = UserScopedConfig.load_user_yaml(this.file_system.getCurrentUser()?.id)
+        const metadata = UserConfigLoader.load_user_yaml(this.file_system.getCurrentUser()?.id)
         return VirtualContentBufferUtils.bufferFromString(metadata);
     }
     async event_writefile(contents: VirtualContentBuffer): Promise<boolean>
     {
         const content = fs.readFileSync(contents.name, 'utf8');
-        const metadata = UserScopedConfig.load_user_from_yaml(content)
-        UserScopedConfig.save_user(this.file_system.getCurrentUser()?.id, metadata)
+        const metadata = UserConfigLoader.load_user_from_yaml(content)
+        UserConfigLoader.save_user(this.file_system.getCurrentUser()?.id, metadata)
         contents.removeCallback();
         this.root_folder.refresh()
         return true;

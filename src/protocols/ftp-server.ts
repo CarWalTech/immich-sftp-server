@@ -249,7 +249,7 @@ export class FtpProtocolServer implements TransferProtocolServer
   async start(): Promise<void>
   {
     await this.ftpServer.listen();
-    logger.info(`FTP`, 'SERVER', `server listening on ${config.listenHost}:${config.ftpPort}`);
+    logger.info(`FTP`, 'SERVER', `server listening on ${config.serverHost}:${config.portFTP}`);
   }
 }
 
@@ -263,17 +263,17 @@ type FtpServerOptions = {
 export function buildFtpServerOptions(): FtpServerOptions
 {
   const options: FtpServerOptions = {
-    url: `ftp://${config.listenHost}:${config.ftpPort}`,
+    url: `ftp://${config.serverHost}:${config.portFTP}`,
   };
 
-  if (config.ftpPassiveHost)
+  if (config.serverHostPassiveFTP)
   {
-    options.pasv_url = config.ftpPassiveHost;
+    options.pasv_url = config.serverHostPassiveFTP;
   }
-  if (config.ftpPassivePortMin != null && config.ftpPassivePortMax != null)
+  if (config.portPassiveFTP != null)
   {
-    options.pasv_min = config.ftpPassivePortMin;
-    options.pasv_max = config.ftpPassivePortMax;
+    options.pasv_min = config.portPassiveFTP.min;
+    options.pasv_max = config.portPassiveFTP.max;
   }
 
   return options;

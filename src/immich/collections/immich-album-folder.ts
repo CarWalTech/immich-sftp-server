@@ -19,7 +19,7 @@ import { ImmichAlbumMetadataFile } from "./immich-album-metadata";
 export class ImmichAlbumFolder extends ImmichVirtualDirectory 
 {
 
-    public static SEPERATOR = config.immichDefaults.subAlbumSeperator
+    public static SEPERATOR = config.immichUserDefaults.subAlbumSeperator
 
     readonly albums_root: ImmichAlbumsDirectory;
     private node_data: ImmichAlbumsDirectoryNode;

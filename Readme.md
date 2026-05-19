@@ -74,17 +74,17 @@ services:
       - "30000-30010:30000-30010" # FTP passive ports (optional)
     environment:
       IMMICH_HOST: https://<your-immich-server-fqdn>:<immich-port>
-      TZ: <your TZ>
-      ENABLE_SFTP: "true"
-      ENABLE_FTP: "false"
-      ENABLE_WEBDAV: "false"
-      SFTP_PORT: "22"
-      FTP_PORT: "21"
-      WEBDAV_PORT: "1900"
-      FTP_PASSIVE_HOST: "your.public.hostname"
-      FTP_PASSIVE_PORT_MIN: "30000"
-      FTP_PASSIVE_PORT_MAX: "30010"
-      LISTEN_HOST: "0.0.0.0"
+      IMMICH_TIMEZONE: <your IMMICH_TIMEZONE>
+      SERVER_ENABLE_SFTP: "true"
+      SERVER_ENABLE_FTP: "false"
+      SERVER_ENABLE_WEBDAV: "false"
+      SERVER_PORT_SFTP: "22"
+      SERVER_PORT_FTP: "21"
+      SERVER_PORT_WEBDAV: "1900"
+      SERVER_HOST_FTP_PASSIVE: "your.public.hostname"
+      SERVER_PORT_FTP_PASSIVE_MIN: "30000"
+      SERVER_PORT_FTP_PASSIVE_MAX: "30010"
+      SERVER_HOST: "0.0.0.0"
       SETTINGS_FILE: "/config/immich-network-storage.yaml"
     volumes:
       - ./immich-network-storage-config:/config
@@ -96,15 +96,15 @@ services:
 | Variable | Default | Description |
 |---|---|---|
 | `IMMICH_HOST` | *(required)* | Base URL of your Immich server (e.g. `http://immich-server:2283`). |
-| `TZ` | `UTC` | Timezone for timestamps. |
-| `LISTEN_HOST` | `0.0.0.0` | Bind address. |
-| `ENABLE_SFTP` | `true` | Enable SFTP. |
-| `ENABLE_FTP` | `false` | Enable FTP. |
-| `ENABLE_WEBDAV` | `false` | Enable WebDAV. |
-| `FTP_PASSIVE_HOST` | *(unset)* | Host/IP returned to FTP clients in passive mode. |
-| `FTP_PASSIVE_PORT_MIN/MAX` | *(unset)* | Passive FTP port range. |
-| `ASSET_FILENAME_PATTERN` | `original` | `original`, `uuid`, `short_uuid`, `date`, `date_uuid`, ... |
-| `ASSET_DOWNLOAD_SOURCE` | `original` | `original` or `preview` (`thumbnail` alias accepted). |
+| `IMMICH_TIMEZONE` | `UTC` | Timezone for timestamps. |
+| `SERVER_HOST` | `0.0.0.0` | Bind address. |
+| `SERVER_ENABLE_SFTP` | `true` | Enable SFTP. |
+| `SERVER_ENABLE_FTP` | `false` | Enable FTP. |
+| `SERVER_ENABLE_WEBDAV` | `false` | Enable WebDAV. |
+| `SERVER_HOST_FTP_PASSIVE` | *(unset)* | Host/IP returned to FTP clients in passive mode. |
+| `SERVER_PORT_FTP_PASSIVE_MIN/MAX` | *(unset)* | Passive FTP port range. |
+| `SERVER_OPTION_ASSET_FILEPATTERN` | `original` | `original`, `uuid`, `short_uuid`, `date`, `date_uuid`, ... |
+| `SERVER_OPTION_ASSET_DOWNLOAD_SOURCE` | `original` | `original` or `preview` (`thumbnail` alias accepted). |
 | `ENABLE_TAGS_FOLDER_DEFAULT` | `true` | Fallback if user preference can’t be read. |
 | `ENABLE_PEOPLE_FOLDER_DEFAULT` | `true` | Fallback if user preference can’t be read. |
 | `SETTINGS_FILE` | `./immich-network-storage.yaml` | Optional YAML settings (supports `{userId}`). |

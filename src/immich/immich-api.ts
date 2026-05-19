@@ -8,7 +8,7 @@ import isValidFilename from 'valid-filename';
 import FormData from 'form-data';
 
 import { ImmichAlbumDirectoryInfo, ImmichTagDirectoryInfo, ImmichTag, mapTagFromApi, applyAlbumDetails, extractCurrentUser, findAlbumNode, getVirtualAlbumTree, ImmichAlbumApiResponse, ImmichAlbumsDirectoryNode, ImmichUser, mapAlbumFromApi, mapAssetFromApi, getAssetMtime, mapFilesFromAssets } from "./utils/immich-api-utils";
-import { config, loadSettingsForUser, UserDisplaySettings, UserScopedConfig } from "../config";
+import { config, UserConfigLoader, UserConfig } from "../config";
 import { PathUtils } from "../utils/path-utils";
 import { AlbumMetadataDocumentUtils } from "./utils/immich-metadata-utils";
 import { StringUtils } from "../utils/string-utils";
@@ -64,16 +64,15 @@ export class ImmichAPI
     private authMode: 'bearer' | 'api-key' = 'bearer';
     private uploadQueue: Array<ImmichUploadItem> = [];
     private currentUser: ImmichUser | null = null;
-    private userSettings: UserScopedConfig;
-    private userDisplaySettings: UserDisplaySettings | null = null;
+    private userSettings: UserConfig;
     private shouldLogoutSession = false;
     private readonly baseUrl;
-    private readonly downloadSemaphore = new DownloadSemaphore(config.maxConcurrentDownloads);
+    private readonly downloadSemaphore = new DownloadSemaphore(config.maxConcurrentDLs);
 
     constructor(immich_url: string)
     {
         this.baseUrl = immich_url;
-        this.userSettings = loadSettingsForUser();
+        this.userSettings = UserConfigLoader.load_user_or_default();
     }
 
     // #region User Authentication
@@ -99,7 +98,7 @@ export class ImmichAPI
             });
             this.currentUser = extractCurrentUser(me, 'api-key');
             const userId = StringUtils.getTrimmedString(this.currentUser?.id);
-            this.userSettings = loadSettingsForUser(userId || undefined);
+            this.userSettings = UserConfigLoader.load_user_or_default(userId || undefined);
             return;
         }
 
@@ -128,7 +127,7 @@ export class ImmichAPI
         }
 
         const userId = StringUtils.getTrimmedString(this.currentUser?.id);
-        this.userSettings = loadSettingsForUser(userId || undefined);
+        this.userSettings = UserConfigLoader.load_user_or_default(userId || undefined);
     }
     public async logout(): Promise<void>
     {
@@ -143,7 +142,7 @@ export class ImmichAPI
         this.immichAccessToken = '';
         this.shouldLogoutSession = false;
         this.currentUser = null;
-        this.userSettings = loadSettingsForUser();
+        this.userSettings = UserConfigLoader.load_user_or_default();
     }
     public async initUser(fallbackUsername: string): Promise<void>
     {
@@ -191,7 +190,7 @@ export class ImmichAPI
         const extension = path.extname(asset.originalFileName);
         const originalFileName = asset.originalFileName.slice(0, -(extension.length));
         const timestamp = getAssetMtime(asset);
-        const dt = DateTime.fromSeconds(timestamp, { zone: config.TZ });
+        const dt = DateTime.fromSeconds(timestamp, { zone: config.immichTimezone });
         const formattedTimestamp = `${dt.toFormat('yyyyLLdd_HHmmss')}${String(dt.millisecond).padStart(3, '0')}`;
         const shortId = asset.id.slice(0, 8);
 
@@ -209,25 +208,6 @@ export class ImmichAPI
             default:
                 return [originalFileName, extension];
         }
-    }
-    public async getUserDisplaySettings()
-    {
-        if (this.userDisplaySettings) return this.userDisplaySettings;
-        var result: UserDisplaySettings | null = UserScopedConfig.load_user_display(undefined, {})
-
-        try
-        {
-            const preferences = await this.SERVER_GetCurrentUserPrefrences();
-            result = UserScopedConfig.load_user_display(this.currentUser?.id, preferences)
-        }
-        catch (error)
-        {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            logger.warn("ImmichAPI", "GetUserDisplaySettings", `Could not fetch user preferences (${errorMessage}), using default collection settings.`);
-        }
-
-        this.userDisplaySettings = result;
-        return this.userDisplaySettings;
     }
 
     // #endregion
@@ -504,8 +484,8 @@ export class ImmichAPI
 
                 applyAlbumDetails(album, response);
 
-                const normal_items = await this.FETCH_AssetsByMetadata({ albumIds: [album.id], visibility: "timeline" })
-                const archived_items = await this.FETCH_AssetsByMetadata({ albumIds: [album.id], visibility: "archive" })
+                const normal_items = await this.FETCH_AssetsByMetadata({ albumIds: [album.id], visibility: "timeline", withDeleted: false })
+                const archived_items = await this.FETCH_AssetsByMetadata({ albumIds: [album.id], visibility: "archive", withDeleted: false })
                 return [...normal_items, ...archived_items];
             },
             buildFiles: (assets) => mapFilesFromAssets(assets, parent, reserved_names)
@@ -536,7 +516,7 @@ export class ImmichAPI
             buildFiles: (assets) => mapFilesFromAssets(assets, parent, reserved_names)
         });
     }
-    public async FETCH_AssetsByMetadata(query: { albumIds?: string[], visibility?: string, tagIds?: string[]; personIds?: string[], isNotInAlbum?: boolean, trashedAfter?: string, trashedBefore?: string }): Promise<ImmichAsset[]>
+    public async FETCH_AssetsByMetadata(query: { albumIds?: string[], visibility?: string, tagIds?: string[]; personIds?: string[], isNotInAlbum?: boolean, trashedAfter?: string, trashedBefore?: string, withDeleted?: boolean }): Promise<ImmichAsset[]>
     {
         const byAssetId = new Map<string, ImmichAsset>();
         let page = 1;
@@ -637,7 +617,14 @@ export class ImmichAPI
         const node = fileEntry.node; // VirtualNodeBuffer
         const filename = fileEntry.filename;
 
-        logger.info(`ImmichAPI`, 'QUEUE', `Uploading: ${filename}`);
+        const fileSize = node.size;
+        logger.info(`ImmichAPI`, 'QUEUE', `Uploading: ${filename} (${fileSize} bytes)`);
+
+        if (fileSize === 0)
+        {
+            logger.warn(`ImmichAPI`, 'QUEUE', `Skipping upload of 0-byte file '${filename}' — no data was written`);
+            return;
+        }
 
         try
         {
@@ -663,7 +650,7 @@ export class ImmichAPI
             let isTrashed = false;
             let assetId: string | undefined;
 
-            if (config.validateUploads)
+            if (config.enableUploadValidation)
             {
                 const bulkCheckResponse = await this.SERVER_ValidateUpload(checksum, filename);
                 const result = bulkCheckResponse.results[0];
@@ -681,7 +668,7 @@ export class ImmichAPI
             if (action === "accept")
             {
                 const data = new FormData();
-                const iso = DateTime.fromSeconds(mtime, { zone: config.TZ }).toJSDate().toISOString();
+                const iso = DateTime.fromSeconds(mtime, { zone: config.immichTimezone }).toJSDate().toISOString();
 
                 data.append('fileModifiedAt', iso);
                 data.append('fileCreatedAt', iso);
@@ -689,7 +676,7 @@ export class ImmichAPI
                 data.append('deviceId', 'immich-network-storage');
 
                 const readStream = node.createReadStream();
-                data.append('assetData', readStream, { filename });
+                data.append('assetData', readStream, { filename, knownLength: fileSize });
 
                 const uploadResponse = await this.SERVER_UploadAsset(data);
                 assetId = uploadResponse.id;
@@ -844,7 +831,7 @@ export class ImmichAPI
         const cached = this.cache.assetFileSizes.get(asset.id);
         if (cached !== undefined) return cached;
 
-        if (config.localFilesMode)
+        if (config.enableLocalFiles)
         {
             const filepath = "/immich" + asset.originalPath;
             const stats = fs.statSync(filepath)
@@ -900,7 +887,7 @@ export class ImmichAPI
         if (cached) return cached;
 
         // 2. Local mode (unchanged)
-        if (config.localFilesMode)
+        if (config.enableLocalFiles)
         {
             const filepath = "/immich" + asset.originalPath;
             const buf = new VirtualContentBuffer(undefined, fs.readFileSync(filepath));
@@ -940,7 +927,7 @@ export class ImmichAPI
 
             logger.debug(`ImmichAPI`, 'SERVER_ReadAsset', `Downloading ${asset.id} via ${endpoint}, Content-Length=${contentLength}`);
 
-            if (contentLength > config.downloadBufferThreshold)
+            if (contentLength > config.maxCacheBufferSize)
             {
                 // Large file — stream to a temp file to avoid heap pressure.
                 // This is important when Dolphin (or similar) opens many large
@@ -975,14 +962,14 @@ export class ImmichAPI
     async SERVER_UploadNode(path: string, node: VirtualContentBuffer, mtime: number)
     {
         const data = new FormData();
-        const iso = DateTime.fromSeconds(mtime, { zone: config.TZ }).toJSDate().toISOString();
+        const iso = DateTime.fromSeconds(mtime, { zone: config.immichTimezone }).toJSDate().toISOString();
 
         data.append('fileModifiedAt', iso);
         data.append('fileCreatedAt', iso);
         data.append('deviceAssetId', path);
         data.append('deviceId', 'immich-network-storage');
 
-        data.append('assetData', node.createReadStream(), { filename: path });
+        data.append('assetData', node.createReadStream(), { filename: path, knownLength: node.size });
 
         return this.SERVER_UploadAsset(data);
     }
