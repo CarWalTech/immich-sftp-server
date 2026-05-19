@@ -1,12 +1,16 @@
 services:
   immich-network-storage-api:
+    develop:
+      watch:
+        - action: rebuild
+          path: .
     command: >
       ts-node-dev --inspect=0.0.0.0:9229 src/server.ts
     ports:
       - "9229:9229" # Development Port
-      - "22832:22" # SFTP
-      - "22100:21" # FTP
-      - "19000:1900" # WebDAV
+      - "22100:${SERVER_PORT_FTP}" # FTP
+      - "22832:${SERVER_PORT_SFTP}" # SFTP
+      - "19000:${SERVER_PORT_WEBDAV}" # WebDAV
     volumes:
       - ./:/app
     environment:

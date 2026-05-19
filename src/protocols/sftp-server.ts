@@ -90,11 +90,14 @@ function TCP_Session(con: SftpConnection, accept: AcceptConnection<Session>, rej
     //Handle map
     const handleMap: Record<string, SftpHandleEntry> = {};
 
+    const phaseOnePending = new Map<string, number>(); // path → expiry ms
+
     const service: SftpConnectionInstance = {
       fsBackend,
       handleMap,
       sftpStream,
-      netConfig
+      netConfig,
+      phaseOnePending
     }
 
     sftpStream.on('ready', async () => { await SFTP_READY(service) });
@@ -117,6 +120,22 @@ function TCP_Session(con: SftpConnection, accept: AcceptConnection<Session>, rej
     sftpStream.on('RENAME', async (reqid: number, oldPath, newPath) => { await SFTP_RENAME(service, reqid, oldPath, newPath) });
     sftpStream.on('SYMLINK', async (reqid: number, targetPath: string, linkPath: string) => { await SFTP_SYMLINK(service, reqid, targetPath, linkPath) });
     sftpStream.on('EXTENDED', async (reqid: number, extName: string, extData: Buffer) => { await SFTP_EXTENDED(service, reqid, extName, extData) });
+
+    // Clean up tmp files for any write handles that were never CLOSE'd
+    // (e.g. when the client drops the connection mid-upload).
+    sftpStream.on('close', () =>
+    {
+      for (const key of Object.keys(handleMap))
+      {
+        const entry = handleMap[key];
+        if (!entry.closed && entry.writeNode)
+        {
+          logger.warn('SFTP', 'CLEANUP', `Connection dropped with open write handle: ${entry.path}`);
+          try { entry.writeNode.removeCallback(); } catch { }
+        }
+      }
+      phaseOnePending.clear();
+    });
   });
 }
 
@@ -239,7 +258,14 @@ async function SFTP_OPEN(self: SftpConnectionInstance, reqid: number, filename: 
     const key = crypto.randomBytes(16).toString('hex');
     const handle = Buffer.from(key, 'ascii');
 
-    logger.info('SFTP', 'OPEN', `for: '${normalized}' (${filename}), handle: ${key}`);
+    const flagNames: string[] = [];
+    if (flags & OPEN_MODE.READ) flagNames.push('READ');
+    if (flags & OPEN_MODE.WRITE) flagNames.push('WRITE');
+    if (flags & OPEN_MODE.APPEND) flagNames.push('APPEND');
+    if (flags & OPEN_MODE.CREAT) flagNames.push('CREAT');
+    if (flags & OPEN_MODE.TRUNC) flagNames.push('TRUNC');
+    if (flags & OPEN_MODE.EXCL) flagNames.push('EXCL');
+    logger.info('SFTP', 'OPEN', `for: '${normalized}' flags=[${flagNames.join('|')}] handle: ${key}`);
 
     const entry: SftpHandleEntry = {
       path: normalized,
@@ -253,6 +279,11 @@ async function SFTP_OPEN(self: SftpConnectionInstance, reqid: number, filename: 
     const WRITE_FLAGS = OPEN_MODE.WRITE | OPEN_MODE.CREAT | OPEN_MODE.TRUNC | OPEN_MODE.APPEND;
     if (flags & WRITE_FLAGS)
     {
+      if (self.phaseOnePending.has(normalized))
+      {
+        self.phaseOnePending.delete(normalized);
+        logger.info('SFTP', 'OPEN', `Phase 2 write starting: ${normalized}`);
+      }
       entry.writeNode = new VirtualContentBuffer(tmp.fileSync());
       entry.sha1 = crypto.createHash('sha1');
       entry.sha1Offset = 0;
@@ -340,6 +371,8 @@ async function SFTP_READ(self: SftpConnectionInstance, reqid: number, handle: Bu
 }
 async function SFTP_WRITE(self: SftpConnectionInstance, reqid: number, handle: Buffer, offset: number, data: Buffer)
 {
+  logger.debug('SFTP', 'WRITE', `handle=${handle.toString('hex').slice(0, 8)} offset=${offset} len=${data.length}`);
+
   try
   {
     const key = getHandleKey(handle);
@@ -347,6 +380,7 @@ async function SFTP_WRITE(self: SftpConnectionInstance, reqid: number, handle: B
 
     if (!entry || entry.closed)
     {
+      logger.warn('SFTP', 'WRITE', `no entry or closed for handle=${handle.toString('hex').slice(0, 8)}`);
       return self.sftpStream.status(reqid, SFTP_STATUS_CODE.FAILURE);
     }
 
@@ -443,12 +477,37 @@ async function SFTP_CLOSE(self: SftpConnectionInstance, reqid: number, handle: B
 
     if (entry.writeNode)
     {
-      // Attach the pre-computed checksum so the upload path can skip re-hashing
-      if (entry.sha1)
+      const bytesWritten = entry.sha1Offset ?? 0;
+      const fileSize = entry.writeNode.size;
+      logger.info('SFTP', 'CLOSE', `write handle closed: ${entry.path} — sha1Offset=${bytesWritten} fileSize=${fileSize}`);
+
+      if (fileSize === 0)
       {
-        entry.writeNode.checksum = entry.sha1.digest('base64');
+        // Phase 1 of a two-phase upload: the client opens and immediately closes
+        // with no data to probe that the path is writable, then checks STAT or
+        // READDIR before sending Phase 2 data.  Register a placeholder so those
+        // queries succeed; clean up the empty tmp file now.
+        // Use fileSize (statSync) not sha1Offset: sha1Offset stays 0 when the
+        // first write is at a non-zero offset (hash is invalidated), which would
+        // incorrectly discard real data in Phase 3+ writes.
+        self.phaseOnePending.set(entry.path, Date.now() + 30_000);
+        logger.info('SFTP', 'CLOSE', `Phase 1 placeholder registered: ${entry.path}`);
+        try { entry.writeNode.removeCallback(); } catch { }
       }
-      await self.fsBackend.writeFile(entry.path, entry.writeNode);
+      else
+      {
+        // Attach the pre-computed checksum so the upload path can skip re-hashing
+        if (entry.sha1)
+        {
+          entry.writeNode.checksum = entry.sha1.digest('base64');
+        }
+        // Fire the Immich upload asynchronously — blocking CLOSE on the HTTP
+        // upload causes SFTP clients to ECONNRESET when the upload takes longer
+        // than their operation timeout (common for large files).
+        void self.fsBackend.writeFile(entry.path, entry.writeNode).catch(e =>
+          logger.error('SFTP', 'CLOSE', 'upload error (async):', e)
+        );
+      }
     }
 
     self.sftpStream.status(reqid, SFTP_STATUS_CODE.OK);
@@ -483,7 +542,12 @@ async function SFTP_STAT(self: SftpConnectionInstance, reqid: number, filePath: 
     const stat_response = await self.fsBackend.stat(normalized);
     if (!stat_response.success || !stat_response.contents)
     {
-      //logger.info('SFTP', mode, `RESPOND NO_SUCH_FILE reqid=${reqid}`);
+      const expiry = self.phaseOnePending.get(normalized);
+      if (expiry && Date.now() < expiry)
+      {
+        logger.info('SFTP', mode, `RESPOND Phase 1 placeholder attrs: ${normalized} reqid=${reqid}`);
+        return self.sftpStream.attrs(reqid, createFileAttributes(0));
+      }
       return self.sftpStream.status(reqid, SFTP_STATUS_CODE.NO_SUCH_FILE);
     }
     const stat = stat_response.contents;
@@ -656,7 +720,7 @@ function createServerConfig(): ServerConfig
 function createConnectionConfig(): SftpConnectionConfig
 {
   return {
-    batchSize: config.readBatchSize
+    batchSize: config.maxReadBatchSize
   }
 }
 function createEphemeralHostKeySync(): Buffer
@@ -706,7 +770,19 @@ async function processReadDirQueue(entry: SftpHandleEntry, key: string, self: Sf
       logger.info('SFTP', 'READDIR', `init listing for handle=${key} path='${entry.path}'`);
       const dotEntries: VirtualMetadata[] = [VirtualMetadata.directory_ro('.'), VirtualMetadata.directory_ro('..')];
       const realFiles = await self.fsBackend.listFiles(entry.path);
-      entry.files = [...dotEntries, ...realFiles]
+
+      // Inject any Phase 1 placeholders that belong to this directory so the
+      // client sees the file it just created before sending Phase 2 data.
+      const now = Date.now();
+      const pendingInDir: VirtualMetadata[] = [];
+      for (const [pendingPath, expiry] of self.phaseOnePending)
+      {
+        if (expiry <= now) { self.phaseOnePending.delete(pendingPath); continue; }
+        if (path.posix.dirname(pendingPath) === entry.path)
+          pendingInDir.push(VirtualMetadata.file_rw(path.posix.basename(pendingPath), 0, now / 1000));
+      }
+
+      entry.files = [...dotEntries, ...realFiles, ...pendingInDir]
       entry.dirIndex = 0;
     }
 
@@ -824,7 +900,8 @@ export interface SftpConnectionInstance
   fsBackend: VirtualFileSystem;
   sftpStream: SFTPWrapper;
   handleMap: Record<string, SftpHandleEntry>;
-  netConfig: SftpConnectionConfig
+  netConfig: SftpConnectionConfig;
+  phaseOnePending: Map<string, number>; // path → expiry ms; Phase 1 placeholders
 }
 
 export interface SftpConnectionConfig
@@ -864,9 +941,9 @@ export class SftpProtocolServer implements TransferProtocolServer
   {
     await new Promise<void>((resolve, reject) =>
     {
-      server.listen(config.sftpPort, config.listenHost, function ()
+      server.listen(config.portSFTP, config.serverHost, function ()
       {
-        logger.info('SFTP', 'SERVER', `SFTP server listening on ${config.listenHost}:${config.sftpPort}`);
+        logger.info('SFTP', 'SERVER', `SFTP server listening on ${config.serverHost}:${config.portSFTP}`);
         resolve();
       });
       server.on('error', reject);

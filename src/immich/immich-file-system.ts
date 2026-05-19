@@ -1,5 +1,5 @@
 import { VFSResponse, VirtualFileSystem } from "../filesystem/virtual-file-system";
-import { config, UserDisplaySettings } from '../config';
+import { config } from '../config';
 import tmp from 'tmp';
 import { ImmichAPI } from "./immich-api";
 import { VirtualDirectory } from "../filesystem/virtual-directory";
@@ -186,10 +186,6 @@ export class ImmichFileSystem implements VirtualFileSystem
     public getUserSettings()
     {
         return this.immichApi.getUserSettings()
-    }
-    public async getUserDisplaySettings(): Promise<UserDisplaySettings>
-    {
-        return await this.immichApi.getUserDisplaySettings()
     }
     public async getResolvedPath(path: string): Promise<VirtualPathInfo>
     {

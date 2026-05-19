@@ -9,11 +9,11 @@ services:
     env_file:
       - .env
     ports:
-      - "22832:22" # SFTP
-      - "22100:21" # FTP
-      - "19000:1900" # WebDAV
+      - "22100:${SERVER_PORT_FTP}" # FTP
+      - "22832:${SERVER_PORT_SFTP}" # SFTP
+      - "19000:${SERVER_PORT_WEBDAV}" # WebDAV
     volumes:
-      - /omv/apps-compose/immich-network-storage/data:/data
-      - /omv/apps-compose/immich-network-storage/config:/config
-      - ${IMMICH_UPLOAD_FOLDER}:/immich/data
+      - ${SERVER_PATH_APPDATA}:/data
+      - ${SERVER_PATH_APPCONFIG}:/config
+      - ${SERVER_PATH_IMMICH_UPLOADS}:/immich/data
     restart: unless-stopped

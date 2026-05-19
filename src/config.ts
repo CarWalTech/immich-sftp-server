@@ -1,322 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import YAML from 'yaml';
-import { getEnvBoolean, getEnvByteSize, getEnvNumber, getEnvOrDefault, getOptionalEnv, getOptionalEnvNumber, requireEnv } from './utils/env-utils';
+import { getEnvBoolean, getEnvByteSize, getOptionalEnvNumberRange, getEnvNumber, getEnvOrDefault, getOptionalEnv, getOptionalEnvNumber, requireEnv, NumberRange } from './utils/env-utils';
 import { logger } from './logger';
+import { getOptionalNestedString } from './utils/yaml-utils';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type AssetFileNamePattern = 'original' | 'assetUuid' | 'shortUuid' | 'date' | 'dateUuid';
-export type AssetDownloadSource = 'original' | 'preview';
-export type UserDisplaySettings = {
-  tagsEnabled: boolean;
-};
-
-
-
-
-export class Config
-{
-  // immich instance
-  immichHost: string
-  immichDefaults: UserScopedConfig
-
-
-  // ip/port
-  listenHost: string
-
-  // ftp
-  enableFtp: boolean
-  ftpPort: number
-  ftpPassiveHost?: string
-  ftpPassivePortMin?: number
-  ftpPassivePortMax?: number
-
-  // sftp
-  enableSftp: boolean
-  sftpPort: number
-
-  // webdav
-  enableWebdav: boolean
-  webdavPort: number
-
-  // server settings
-  TZ: string
-  validateUploads: boolean
-  readBatchSize: number
-  localFilesMode: boolean
-  maxConcurrentDownloads: number
-  downloadBufferThreshold: number
-
-
-  constructor()
-  {
-    const ftpPassivePortMin = getOptionalEnvNumber('FTP_PASSIVE_PORT_MIN');
-    const ftpPassivePortMax = getOptionalEnvNumber('FTP_PASSIVE_PORT_MAX');
-
-
-    if ((ftpPassivePortMin == null) !== (ftpPassivePortMax == null))
-      throw new Error('FTP_PASSIVE_PORT_MIN and FTP_PASSIVE_PORT_MAX must both be set or both be unset.');
-
-    if (ftpPassivePortMin != null && ftpPassivePortMax != null && ftpPassivePortMin > ftpPassivePortMax)
-      throw new Error('FTP_PASSIVE_PORT_MIN must be less than or equal to FTP_PASSIVE_PORT_MAX.');
-
-
-    // immich instance
-    this.immichHost = requireEnv('IMMICH_HOST');
-    this.immichDefaults = UserScopedConfig.DEFAULTS
-
-    // ip/port
-    this.listenHost = getEnvOrDefault('LISTEN_HOST', '0.0.0.0');
-
-    // ftp
-    this.enableFtp = getEnvBoolean('ENABLE_FTP', false);
-    this.ftpPort = getEnvNumber('FTP_PORT', 21);
-    this.ftpPassiveHost = getOptionalEnv('FTP_PASSIVE_HOST');
-    this.ftpPassivePortMin;
-    this.ftpPassivePortMax;
-
-    // sftp
-    this.enableSftp = getEnvBoolean('ENABLE_SFTP', true);
-    this.sftpPort = getEnvNumber('SFTP_PORT', 22);
-
-    // webdav
-    this.enableWebdav = getEnvBoolean('ENABLE_WEBDAV', false);
-    this.webdavPort = getEnvNumber('WEBDAV_PORT', 1900);
-
-    // server settings
-    this.TZ = getEnvOrDefault('TZ', 'UTC');
-    this.validateUploads = getEnvBoolean('VALIDATE_FILE_UPLOADS', true);
-    this.readBatchSize = getEnvNumber('READ_BATCH_SIZE', 50);
-    this.localFilesMode = getEnvBoolean('LOCAL_FILES_MODE', false);
-    this.maxConcurrentDownloads = getEnvNumber('MAX_CONCURRENT_DOWNLOADS', 6);
-    this.downloadBufferThreshold = getEnvByteSize('DOWNLOAD_BUFFER_THRESHOLD', '4MB')
-  }
-};
-
-export class UserScopedConfig
-{
-  subAlbumSeperator: string = " / "
-  assetFileNamePattern: AssetFileNamePattern = 'original'
-  assetDownloadSource: AssetDownloadSource = 'original'
-  enableTagsFolder: boolean = true
-
-  static readonly DEFAULTS: UserScopedConfig = this.load_defaults()
-
-  public static load_defaults()
-  {
-    const envFileNamePattern = parseAssetFileNamePattern(getOptionalEnv('ASSET_FILENAME_PATTERN'));
-    const envDownloadSource = parseAssetDownloadSource(getOptionalEnv('ASSET_DOWNLOAD_SOURCE'));
-
-    const result = new UserScopedConfig()
-    result.subAlbumSeperator = getEnvOrDefault('SUB_ALBUM_SEPERATOR', result.subAlbumSeperator);
-    result.assetFileNamePattern = envFileNamePattern ?? result.assetFileNamePattern;
-    result.assetDownloadSource = envDownloadSource ?? result.assetDownloadSource;
-    result.enableTagsFolder = getEnvBoolean('ENABLE_TAGS_FOLDER_DEFAULT', true);
-
-    return result
-  }
-  public static load_user(user_id: string | undefined): UserScopedConfig
-  {
-    return this.read_user_yaml(user_id)
-  }
-  public static load_user_yaml(user_id: string | undefined): string
-  {
-    try
-    {
-      const result = this.load_user(user_id)
-      return YAML.stringify(result)
-    }
-    catch
-    {
-      return ""
-    }
-  }
-  public static load_user_display(user_id: string | undefined, preferences: any): UserDisplaySettings
-  {
-    const results = this.load_user(user_id)
-
-    const is_tags_enabled = typeof preferences?.tags?.enabled === 'boolean' ? preferences.tags.enabled : false
-
-    return {
-      tagsEnabled: is_tags_enabled ? results.enableTagsFolder : false
-    }
-  }
-  public static load_user_from_yaml(content: string, path: string = "internal"): UserScopedConfig
-  {
-    const yaml = this.read_yaml(content, path)
-
-    const envFileNamePattern = parseAssetFileNamePattern(getOptionalNestedString(yaml, ['assetFileNamePattern']));
-    const envDownloadSource = parseAssetDownloadSource(getOptionalNestedString(yaml, ['assetDownloadSource']));
-    const envEnableTagsFolder = getOptionalNestedBoolean(yaml, ['enableTagsFolder'])
-    const envSubAlbumSeperator = getOptionalNestedString(yaml, ['subAlbumSeperator'])
-
-    const user_result = new UserScopedConfig()
-    user_result.assetFileNamePattern = envFileNamePattern ?? this.DEFAULTS.assetFileNamePattern
-    user_result.assetDownloadSource = envDownloadSource ?? this.DEFAULTS.assetDownloadSource
-    user_result.enableTagsFolder = envEnableTagsFolder ?? this.DEFAULTS.enableTagsFolder
-    user_result.subAlbumSeperator = envSubAlbumSeperator ?? this.DEFAULTS.subAlbumSeperator
-    return user_result
-  }
-  public static save_user(userId: string | undefined, data: UserScopedConfig): boolean
-  {
-    const settingsFilePath = this.resolve_path(userId);
-    if (!settingsFilePath)
-    {
-      logger.error("UserScopedConfig", "SaveYAML", "Path not found for user id: ", userId)
-      return false;
-    }
-
-    try
-    {
-      // 1. Ensure directory exists
-      const dir = path.dirname(settingsFilePath);
-      fs.mkdirSync(dir, { recursive: true });
-
-      // 2. Convert to YAML
-      const yamlStr = YAML.stringify(data);
-
-      // 3. Write file (creates if missing)
-      fs.writeFileSync(settingsFilePath, yamlStr, "utf8");
-    }
-    catch (ex)
-    {
-      logger.error("UserScopedConfig", "SaveYAML", "Error Saving YAML: ", ex)
-      return false;
-    }
-    return true;
-  }
-
-  private static read_yaml(content: string, path: string = "internal")
-  {
-    const parsed = YAML.parse(content);
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
-    {
-      throw new Error(`Invalid settings file '${path}': expected a YAML object.`);
-    }
-    return parsed as Record<string, unknown>;
-  }
-  private static read_user_yaml(userId?: string): UserScopedConfig
-  {
-    const settingsFilePath = this.resolve_path(userId);
-    if (!settingsFilePath) return this.DEFAULTS;
-
-    if (!fs.existsSync(settingsFilePath))
-    {
-      return this.DEFAULTS
-    }
-    else
-    {
-      try
-      {
-        const content = fs.readFileSync(settingsFilePath, 'utf8');
-        return this.load_user_from_yaml(content, settingsFilePath)
-      }
-      catch
-      {
-        return this.DEFAULTS
-      }
-
-    }
-
-
-  }
-  private static resolve_path(userId?: string): string | undefined
-  {
-    const settingsFilePath = getEnvOrDefault('SETTINGS_FILE_PATH', './config/{userId}.yaml');
-    const candidates: string[] = [];
-    const normalizedUserId = userId?.trim();
-    if (normalizedUserId && UUID_PATTERN.test(normalizedUserId))
-    {
-      if (settingsFilePath.includes('{userId}'))
-      {
-        candidates.push(settingsFilePath.replace(/\{userId\}/g, normalizedUserId));
-      }
-      else
-      {
-        const parsed = path.parse(settingsFilePath);
-        const fileName = `${parsed.name}.${normalizedUserId}${parsed.ext}`;
-        candidates.push(parsed.dir ? path.join(parsed.dir, fileName) : fileName);
-      }
-    }
-    candidates.push(settingsFilePath);
-
-    const candidatePath = candidates.at(0);
-    if (candidatePath) return candidatePath;
-    else return undefined;
-  }
-
-};
-
-
-
-
-
-function getOptionalNestedString(source: Record<string, unknown>, path: string[]): string | undefined
-{
-  let current: unknown = source;
-  for (const part of path)
-  {
-    if (typeof current !== 'object' || current === null || Array.isArray(current) || !(part in current))
-    {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[part];
-  }
-
-  if (typeof current !== 'string')
-  {
-    return undefined;
-  }
-  const normalized = current.trim();
-  return normalized === '' ? undefined : normalized;
-}
-
-function getOptionalNestedBoolean(source: Record<string, unknown>, path: string[]): boolean | undefined
-{
-  let current: unknown = source;
-  for (const part of path)
-  {
-    if (typeof current !== 'object' || current === null || Array.isArray(current) || !(part in current))
-    {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[part];
-  }
-
-  if (typeof current === 'boolean')
-  {
-    return current;
-  }
-  if (typeof current !== 'string')
-  {
-    return undefined;
-  }
-
-  const normalized = current.trim().toLowerCase();
-  if (['1', 'true', 'yes', 'on'].includes(normalized))
-  {
-    return true;
-  }
-  if (['0', 'false', 'no', 'off'].includes(normalized))
-  {
-    return false;
-  }
-  return undefined;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
 function parseAssetFileNamePattern(value: string | undefined): AssetFileNamePattern | undefined
 {
   if (!value)
@@ -344,6 +35,7 @@ function parseAssetFileNamePattern(value: string | undefined): AssetFileNamePatt
   return parsed;
 }
 
+export type AssetDownloadSource = 'original' | 'preview';
 function parseAssetDownloadSource(value: string | undefined): AssetDownloadSource | undefined
 {
   if (!value)
@@ -365,9 +57,222 @@ function parseAssetDownloadSource(value: string | undefined): AssetDownloadSourc
   return parsed;
 }
 
-export function loadSettingsForUser(user_id?: string): UserScopedConfig
+export class Config
 {
-  return UserScopedConfig.load_user(user_id)
+  // immich settings
+  immichHost: string
+  immichTimezone: string
+  immichUserDefaults: UserConfig
+
+  // server protocols
+  enableFTP: boolean
+  enableSFTP: boolean
+  enableWebDAV: boolean
+
+  // server hostname
+  serverHost: string
+  serverHostPassiveFTP?: string
+
+  // server ports
+  portFTP: number
+  portSFTP: number
+  portWebDAV: number
+  portPassiveFTP?: NumberRange
+
+  // server feature toggles
+  enableLocalFiles: boolean
+  enableUploadValidation: boolean
+
+  // server size settings
+  maxConcurrentDLs: number
+  maxReadBatchSize: number
+  maxCacheBufferSize: number
+
+  // server asset / album settings
+  assetFilePattern: AssetFileNamePattern
+  assetDownloadSource: AssetDownloadSource
+  albumFolderSeperator: string
+
+
+  constructor()
+  {
+    // immich settings
+    this.immichHost = requireEnv('IMMICH_HOST');
+    this.immichTimezone = getEnvOrDefault('IMMICH_TIMEZONE', 'UTC');
+    this.immichUserDefaults = UserConfigLoader.DEFAULTS
+
+    // server modes
+    this.enableFTP = getEnvBoolean('SERVER_ENABLE_FTP', false);
+    this.enableSFTP = getEnvBoolean('SERVER_ENABLE_SFTP', true);
+    this.enableWebDAV = getEnvBoolean('SERVER_ENABLE_WEBDAV', false);
+
+    // server hostname
+    this.serverHost = getEnvOrDefault('SERVER_HOST', '0.0.0.0');
+    this.serverHostPassiveFTP = getOptionalEnv('SERVER_HOST_FTP_PASSIVE');
+
+    // server ports
+    this.portFTP = getEnvNumber('SERVER_PORT_FTP', 21);
+    this.portSFTP = getEnvNumber('SERVER_PORT_SFTP', 22);
+    this.portWebDAV = getEnvNumber('SERVER_PORT_WEBDAV', 1900);
+    this.portPassiveFTP = getOptionalEnvNumberRange('SERVER_PORT_FTP_PASSIVE_MIN', 'SERVER_PORT_FTP_PASSIVE_MAX');
+
+    // server settings
+    this.enableLocalFiles = getEnvBoolean('SERVER_OPTION_ENABLE_LOCAL_FILES', false);
+    this.enableUploadValidation = getEnvBoolean('SERVER_OPTION_ENABLE_UPLOAD_VALIDATION', true);
+
+    // server size settings
+    this.maxConcurrentDLs = getEnvNumber('SERVER_OPTION_MAX_CONCURRENT_DOWNLOADS', 6);
+    this.maxReadBatchSize = getEnvNumber('SERVER_OPTION_MAX_READ_BATCH_SIZE', 50);
+    this.maxCacheBufferSize = getEnvByteSize('SERVER_OPTION_MAX_CACHE_BUFFER', '4MB')
+
+    // server asset / album settings
+    this.assetFilePattern = parseAssetFileNamePattern(getOptionalEnv('SERVER_OPTION_ASSET_FILEPATTERN')) ?? 'original';
+    this.assetDownloadSource = parseAssetDownloadSource(getOptionalEnv('SERVER_OPTION_ASSET_DOWNLOAD_SOURCE')) ?? 'original';
+    this.albumFolderSeperator = getEnvOrDefault('SERVER_OPTION_ALBUM_SUBFOLDER_PATTERN', " / ");
+  }
+}
+
+export interface UserConfig
+{
+  subAlbumSeperator: string
+  assetFileNamePattern: AssetFileNamePattern
+  assetDownloadSource: AssetDownloadSource
+}
+
+export class UserConfigLoader
+{
+  static readonly DEFAULTS: UserConfig = UserConfigLoader.load_defaults()
+
+  public static load_user(user_id: string | undefined): UserConfig
+  {
+    return this.read_user_yaml(user_id)
+  }
+  public static load_user_or_default(user_id?: string): UserConfig
+  {
+    return this.read_user_yaml(user_id)
+  }
+  public static load_user_yaml(user_id: string | undefined): string
+  {
+    try
+    {
+      const result = this.load_user(user_id)
+      return YAML.stringify(result)
+    }
+    catch
+    {
+      return ""
+    }
+  }
+  public static load_user_from_yaml(content: string, path: string = "internal"): UserConfig
+  {
+    const yaml = this.read_yaml(content, path)
+    const envFileNamePattern = parseAssetFileNamePattern(getOptionalNestedString(yaml, ['assetFileNamePattern']));
+    const envDownloadSource = parseAssetDownloadSource(getOptionalNestedString(yaml, ['assetDownloadSource']));
+    const envSubAlbumSeperator = getOptionalNestedString(yaml, ['subAlbumSeperator'])
+    return {
+      subAlbumSeperator: envSubAlbumSeperator ?? this.DEFAULTS.subAlbumSeperator,
+      assetDownloadSource: envDownloadSource ?? this.DEFAULTS.assetDownloadSource,
+      assetFileNamePattern: envFileNamePattern ?? this.DEFAULTS.assetFileNamePattern
+    }
+  }
+  public static load_defaults(): UserConfig
+  {
+    var config = new Config();
+    return {
+      subAlbumSeperator: config.albumFolderSeperator,
+      assetFileNamePattern: config.assetFilePattern,
+      assetDownloadSource: config.assetDownloadSource
+    }
+  }
+
+  private static read_yaml(content: string, path: string = "internal")
+  {
+    const parsed = YAML.parse(content);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+    {
+      throw new Error(`Invalid settings file '${path}': expected a YAML object.`);
+    }
+    return parsed as Record<string, unknown>;
+  }
+  private static read_user_yaml(userId?: string): UserConfig
+  {
+    const settingsFilePath = this.resolve_user_path(userId);
+    if (!settingsFilePath) return this.DEFAULTS;
+
+    if (!fs.existsSync(settingsFilePath))
+    {
+      return this.DEFAULTS
+    }
+    else
+    {
+      try
+      {
+        const content = fs.readFileSync(settingsFilePath, 'utf8');
+        return this.load_user_from_yaml(content, settingsFilePath)
+      }
+      catch
+      {
+        return this.DEFAULTS
+      }
+
+    }
+
+
+  }
+
+  public static save_user(userId: string | undefined, data: UserConfigLoader): boolean
+  {
+    const settingsFilePath = this.resolve_user_path(userId);
+    if (!settingsFilePath)
+    {
+      logger.error("UserScopedConfig", "SaveYAML", "Path not found for user id: ", userId)
+      return false;
+    }
+
+    try
+    {
+      // 1. Ensure directory exists
+      const dir = path.dirname(settingsFilePath);
+      fs.mkdirSync(dir, { recursive: true });
+
+      // 2. Convert to YAML
+      const yamlStr = YAML.stringify(data);
+
+      // 3. Write file (creates if missing)
+      fs.writeFileSync(settingsFilePath, yamlStr, "utf8");
+    }
+    catch (ex)
+    {
+      logger.error("UserScopedConfig", "SaveYAML", "Error Saving YAML: ", ex)
+      return false;
+    }
+    return true;
+  }
+  private static resolve_user_path(userId?: string): string | undefined
+  {
+    const settingsFilePath = "/config/{userId}.yaml"
+
+    const candidates: string[] = [];
+    const normalizedUserId = userId?.trim();
+    if (normalizedUserId && UUID_PATTERN.test(normalizedUserId))
+    {
+      if (settingsFilePath.includes('{userId}'))
+      {
+        candidates.push(settingsFilePath.replace(/\{userId\}/g, normalizedUserId));
+      }
+      else
+      {
+        const parsed = path.parse(settingsFilePath);
+        const fileName = `${parsed.name}.${normalizedUserId}${parsed.ext}`;
+        candidates.push(parsed.dir ? path.join(parsed.dir, fileName) : fileName);
+      }
+    }
+    candidates.push(settingsFilePath);
+
+    const candidatePath = candidates.at(0);
+    if (candidatePath) return candidatePath;
+    else return undefined;
+  }
 }
 
 export const config = new Config();
