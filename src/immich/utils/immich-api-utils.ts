@@ -3,9 +3,8 @@ import { PathUtils } from "../../utils/path-utils";
 import { ImmichAlbumFolder } from "../collections/immich-album-folder";
 import { ImmichVirtualDirectory } from "../collections/immich-virtual-directory";
 import { ImmichVirtualAssetFile } from "../collections/immich-virtual-asset-file";
-import { ImmichAPI } from "../immich-api";
 import { logger } from "../../logger";
-import { VirtualDirectory } from "../../filesystem/virtual-directory";
+import { DateUtils } from "../../utils/date-utils";
 
 export interface ImmichAlbumUser
 {
@@ -185,7 +184,7 @@ export function getAlbumMtime(album: ImmichAlbumBase): number
     }
 
     logger.warn('ImmichAlbumUtils', 'getAlbumMtime', 'warn', `Album '${album.albumName}' (ID: ${album.id}) has missing/invalid createdAt and updatedAt timestamps, using current time as mtime fallback.`);
-    return Math.floor(Date.now() / 1000);
+    return DateUtils.getTimestampNow();
 }
 export function getTagMtime(album: ImmichTag): number
 {
@@ -202,7 +201,7 @@ export function getTagMtime(album: ImmichTag): number
     }
 
     logger.warn("ImmichTagUtils", "getTagMtime", `Tag '${album.value}' (ID: ${album.id}) has missing/invalid createdAt and updatedAt timestamps, using current time as mtime fallback.`)
-    return Math.floor(Date.now() / 1000);
+    return DateUtils.getTimestampNow();
 }
 export function getVirtualTagTree(tags: ImmichTag[]): ImmichTagsDirectoryNode
 {
@@ -259,7 +258,7 @@ export function getAssetMtime(asset: ImmichAsset): number
     }
 
     logger.warn('ImmichAssetUtils', 'getAssetMtime', `Asset '${asset.originalFileName}' (ID: ${asset.id}) has missing/invalid timestamps, using current time fallback.`);
-    return Math.floor(Date.now() / 1000);
+    return DateUtils.getTimestampNow();
 }
 
 // Mapping

@@ -9,6 +9,7 @@ import { ImmichRootDirectory } from "./immich-root-directory";
 import { ImmichVirtualAssetFile } from "./immich-virtual-asset-file";
 import { canRecieveFileFrom, canSendFileTo } from "../utils/immich-fs-utils";
 import { ImmichVirtualDirectory } from "./immich-virtual-directory";
+import { DateUtils } from "../../utils/date-utils";
 
 export class ImmichRootUnsortedDirectory extends ImmichVirtualDirectory
 {
@@ -24,7 +25,7 @@ export class ImmichRootUnsortedDirectory extends ImmichVirtualDirectory
     }
     async event_stat(): Promise<VirtualMetadata>
     {
-        return VirtualMetadata.directory_rw(this.name, Math.floor(Date.now() / 1000))
+        return VirtualMetadata.directory_rw(this.name, DateUtils.getTimestampNow())
     }
     async event_mkdir(filename: string): Promise<boolean>
     {

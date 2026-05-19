@@ -19,6 +19,7 @@ export async function deleteAssetFromContainer(item: ImmichVirtualAssetFile, api
             if (info !== undefined)
             {
                 await api.SERVER_DeleteAssetFromAlbum(info, item.asset_data);
+                album.file_system.getCache().invalidateAlbumContents([info.id]);
                 return true;
             }
             else return false
@@ -26,6 +27,7 @@ export async function deleteAssetFromContainer(item: ImmichVirtualAssetFile, api
         else if (container instanceof ImmichRootUnsortedDirectory)
         {
             await api.SERVER_DeleteAsset(item.asset_data);
+            container.refresh()
             return true;
         }
         return true

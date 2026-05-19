@@ -1,7 +1,14 @@
 import path from "path";
 import { BaseLogger, ILogObjMeta, ISettingsParam, ILogObj, Logger } from "tslog";
+import { getEnvBoolean } from "./utils/env-utils";
 
 const IGNORED_COMBINATIONS: Record<string, string[]> = {}
+
+const ENABLE_DEBUG_LOGS = getEnvBoolean('SERVER_LOGS_DEBUG', false)
+const ENABLE_INFO_LOGS = getEnvBoolean('SERVER_LOGS_INFO', true)
+const ENABLE_WARN_LOGS = getEnvBoolean('SERVER_LOGS_WARN', true)
+const ENABLE_ERROR_LOGS = getEnvBoolean('SERVER_LOGS_ERROR', true)
+const ENABLE_EXPLICIT_LOGS = getEnvBoolean('SERVER_LOGS_EXPLICIT', false)
 
 
 export class CustomLogger<LogObj> extends BaseLogger<LogObj>
@@ -10,7 +17,6 @@ export class CustomLogger<LogObj> extends BaseLogger<LogObj>
     {
         super(settings, logObj, 5);
     }
-
     private is_ignored(args: unknown[])
     {
         if (args.length >= 3)
@@ -51,32 +57,47 @@ export class CustomLogger<LogObj> extends BaseLogger<LogObj>
         }
 
     }
+
     public debug(...args: unknown[]): LogObj & ILogObjMeta | undefined
     {
+        if (!ENABLE_DEBUG_LOGS) return;
+        if (this.is_ignored(args)) return;
+        args = this.format_args(args)
         return super.log(2, "DEBUG", ...args);
     }
     public info(...args: unknown[]): LogObj & ILogObjMeta | undefined
     {
+        if (!ENABLE_INFO_LOGS) return;
         if (this.is_ignored(args)) return;
         args = this.format_args(args)
         return super.log(3, "INFO", ...args);
     }
     public warn(...args: unknown[]): LogObj & ILogObjMeta | undefined
     {
+        if (!ENABLE_WARN_LOGS) return;
+        if (this.is_ignored(args)) return;
+        args = this.format_args(args)
         return super.log(4, "WARN", ...args);
     }
     public error(...args: unknown[]): LogObj & ILogObjMeta | undefined
     {
+        if (!ENABLE_ERROR_LOGS) return;
+        if (this.is_ignored(args)) return;
+        args = this.format_args(args)
         return super.log(5, "ERROR", ...args);
     }
-
-
-
+    public explicit(...args: unknown[]): LogObj & ILogObjMeta | undefined
+    {
+        if (!ENABLE_EXPLICIT_LOGS) return;
+        if (this.is_ignored(args)) return;
+        args = this.format_args(args)
+        return super.log(6, "EXPLICIT", ...args)
+    }
 }
 const srcFilename = path.join(__dirname, "../");
 
 export const logger = new CustomLogger({
-    minLevel: 3,
+    minLevel: 0,
     prettyLogTemplate: "{{yyyy}}.{{mm}}.{{dd}} {{hh}}:{{MM}}:{{ss}}:{{ms}}\t{{logLevelName}}\t[{{fullFilePath}}{{name}}]\n",
     prettyErrorTemplate: "\n{{errorName}} {{errorMessage}}\nerror stack:\n{{errorStack}}",
     prettyErrorStackTemplate: "  • {{fileName}}\t{{method}}\n\t{{filePathWithLine}}",
@@ -94,6 +115,7 @@ export const logger = new CustomLogger({
             WARN: ["bold", "yellow"],
             ERROR: ["bold", "red"],
             FATAL: ["bold", "redBright"],
+            EXPLICIT: ["bold", "black", "bgGreen"],
         },
         fileName: ["yellow"],
         dateIsoStr: "white",

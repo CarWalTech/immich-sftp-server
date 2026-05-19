@@ -4,6 +4,7 @@ import { VirtualNode } from "./virtual-node";
 import { VirtualContentBuffer } from "./virtual-content-buffer";
 import { VirtualMetadata } from './virtual-metadata';
 import { logger } from "../logger";
+import { DateUtils } from "../utils/date-utils";
 
 export type VirtualDirectoryMoveItemFn = (item: VirtualNode, container: VirtualDirectory) => boolean;
 export type VirtualDirectoryOptions = { sendFn?: VirtualDirectoryMoveItemFn, recieveFn?: VirtualDirectoryMoveItemFn, refreshOnMove?: boolean, refreshOnReadDir?: boolean }
@@ -117,10 +118,7 @@ export class VirtualDirectory extends VirtualNode
     }
     async event_stat(): Promise<VirtualMetadata>
     {
-        return VirtualMetadata.directory_rw(
-            this.name,
-            Math.floor(Date.now() / 1000)
-        );
+        return VirtualMetadata.directory_rw(this.name, DateUtils.getTimestampNow());
     }
     async event_rename(new_name: string): Promise<boolean>
     {

@@ -14,6 +14,7 @@ import { TransferProtocolServer } from './transfer-protocol-server';
 import { logger } from '../logger';
 import path from 'path';
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
+import { DateUtils } from '../utils/date-utils';
 
 // ──────────────────────────────────────────────────────────────
 // Shared path normalization (identical to SFTP)
@@ -148,7 +149,7 @@ class WebdavUploadStream extends Writable
         await this.fsBackend.writeFile(this.targetPath, new VirtualContentBuffer(this.tmpFile));
         await this.fsBackend.setAttributes(
           this.targetPath,
-          Math.floor(Date.now() / 1000),
+          DateUtils.getTimestampNow(),
         );
         this.completed = true;
         cb();

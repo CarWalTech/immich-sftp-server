@@ -2,6 +2,8 @@ import { ImmichVirtualAssetFile } from "./collections/immich-virtual-asset-file"
 import { ImmichAlbumDirectoryInfo, ImmichAlbumsDirectoryNode, ImmichUser } from "./utils/immich-api-utils";
 import { ImmichAsset } from "./utils/immich-api-utils";
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
+import { DateUtils } from "../utils/date-utils";
+import { logger } from "../logger";
 
 export interface ImmichCachedEntry<T>
 {
@@ -100,19 +102,20 @@ export class ImmichSessionCache
                     try { freshMeta = await fetchMeta(); } catch (_) { }
 
                     // Cache hit: API timestamp matches what we stored.
+                    logger.explicit("ImmichSessionCache", "ASSETS", `Cache Check Meta: new=${freshMeta?.updatedAt} old=${cached?.updatedAt}`)
                     if (cached && freshMeta?.updatedAt && freshMeta.updatedAt === cached.updatedAt)
                         return cached.data;
 
                     // Cache stale or missing — fetch and store with the API timestamp.
                     const data = await fetchData();
-                    const updatedAt = freshMeta?.updatedAt ?? Date.now().toString();
+                    const updatedAt = freshMeta?.updatedAt ?? DateUtils.getTimeStringNowISO();
                     this.assetTree.set(cacheKey, { data, updatedAt });
                     return data;
                 }
 
                 // No cached entry and no validator.
                 const data = await fetchData();
-                this.assetTree.set(cacheKey, { data, updatedAt: Date.now().toString() });
+                this.assetTree.set(cacheKey, { data, updatedAt: DateUtils.getTimeStringNowISO() });
                 return data;
             })();
 
@@ -148,7 +151,7 @@ export class ImmichSessionCache
 
                 // Cache stale or missing — fetch data and store with the API timestamp.
                 const data = await fetchData();
-                const updatedAt = freshMeta?.updatedAt ?? Date.now().toString();
+                const updatedAt = freshMeta?.updatedAt ?? DateUtils.getTimeStringNowISO();
                 this.albumsTree.set(cacheKey, { data, updatedAt });
 
                 const album = data?.album ?? undefined;
@@ -159,7 +162,7 @@ export class ImmichSessionCache
 
             // No cached entry and no validator.
             const data = await fetchData();
-            this.albumsTree.set(cacheKey, { data, updatedAt: Date.now().toString() });
+            this.albumsTree.set(cacheKey, { data, updatedAt: DateUtils.getTimeStringNowISO() });
 
             const album = data?.album ?? undefined;
             if (album) this.albumsMap.set(album.id, cacheKey);

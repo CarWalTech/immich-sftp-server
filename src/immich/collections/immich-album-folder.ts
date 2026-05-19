@@ -15,6 +15,7 @@ import { canRecieveFileFrom, canSendFileTo } from "../utils/immich-fs-utils";
 import { ImmichVirtualDirectory } from "./immich-virtual-directory";
 import { logger } from "../../logger";
 import { ImmichAlbumMetadataFile } from "./immich-album-metadata";
+import { DateUtils } from "../../utils/date-utils";
 
 export class ImmichAlbumFolder extends ImmichVirtualDirectory 
 {
@@ -114,7 +115,7 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
     }
     async event_stat(): Promise<VirtualMetadata>
     {
-        return VirtualMetadata.directory_rw(this.name, Math.floor(Date.now() / 1000))
+        return VirtualMetadata.directory_rw(this.name, DateUtils.getTimestampNow())
     }
     async event_mkdir(folderName: string): Promise<boolean>
     {

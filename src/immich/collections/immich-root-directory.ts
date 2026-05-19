@@ -7,6 +7,7 @@ import { ImmichAlbumsDirectory } from "./immich-albums-directory";
 import { ImmichRootTrashDirectory, ImmichRootUnsortedDirectory } from "./immich-root-commons";
 import { logger } from "../../logger";
 import { ImmichRootMetadataFile } from "./immich-root-metadata";
+import { DateUtils } from "../../utils/date-utils";
 
 export class ImmichRootDirectory extends VirtualDirectory
 {
@@ -50,7 +51,7 @@ export class ImmichRootDirectory extends VirtualDirectory
 
     async event_stat(): Promise<VirtualMetadata>
     {
-        return VirtualMetadata.directory_ro(this.name, Math.floor(Date.now() / 1000));
+        return VirtualMetadata.directory_ro(this.name, DateUtils.getTimestampNow());
     }
 
     async event_rebuild()
