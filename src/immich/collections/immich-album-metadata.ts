@@ -7,7 +7,6 @@ import { PathUtils } from "../../utils/path-utils";
 import { ImmichFileSystem } from "../immich-file-system";
 import { getAlbumMtime, ImmichAlbumBase } from "../utils/immich-api-utils";
 import { ImmichRootDirectory } from "./immich-root-directory";
-import { ImmichAssetUtils } from "../utils/immich-asset-utils";
 import { ALBUM_BROWSER_LINK_FILE_NAME, ALBUM_METADATA_FILE_NAME } from "../utils/immich-metadata-utils";
 import tmp from 'tmp';
 import { VirtualContentBufferUtils } from "../../filesystem/virtual-content-buffer";
