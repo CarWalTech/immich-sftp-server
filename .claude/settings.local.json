@@ -6,7 +6,9 @@
       "Bash(node_modules\\\\.bin\\\\tsc --noEmit)",
       "Bash(./node_modules/.bin/tsc --noEmit)",
       "Bash(npm install *)",
-      "Bash(node_modules/.bin/tsc --noEmit)"
+      "Bash(node_modules/.bin/tsc --noEmit)",
+      "Bash(ls /omv/apps-compose/immich-network-storage/ 2>/dev/null)",
+      "Read(//omv/apps-compose/immich-network-storage/**)"
     ]
   }
 }

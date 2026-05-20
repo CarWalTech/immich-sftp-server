@@ -200,7 +200,6 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
     }
     refresh()
     {
-        this.file_system.getCache().invalidateAlbums();
         super.refresh()
     }
 }

@@ -85,7 +85,7 @@ export function getEnvByteSize(name: string, defaultValue: string): number
 }
 
 
-export function getEnvNumber(name: string, defaultValue: number): number
+export function getEnvNumber(name: string, defaultValue: number, acceptZero: boolean = false): number
 {
     const val = process.env[name];
     if (!val)
@@ -94,7 +94,7 @@ export function getEnvNumber(name: string, defaultValue: number): number
     }
 
     const parsed = Number(val);
-    if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535)
+    if (!Number.isInteger(parsed) || (parsed <= 0 && !acceptZero) || parsed > 65535)
     {
         throw new Error(`Invalid numeric environment variable ${name}: ${val}. Expected an integer in range 1-65535.`);
     }
