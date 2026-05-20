@@ -121,7 +121,7 @@ export class Config
     this.enableUploadValidation = getEnvBoolean('SERVER_OPTION_ENABLE_UPLOAD_VALIDATION', true);
 
     // server size settings
-    this.maxConcurrentDLs = getEnvNumber('SERVER_OPTION_MAX_CONCURRENT_DOWNLOADS', 6);
+    this.maxConcurrentDLs = getEnvNumber('SERVER_OPTION_MAX_CONCURRENT_DOWNLOADS', 6, true);
     this.maxReadBatchSize = getEnvNumber('SERVER_OPTION_MAX_READ_BATCH_SIZE', 50);
     this.maxCacheBufferSize = getEnvByteSize('SERVER_OPTION_MAX_CACHE_BUFFER', '4MB')
 

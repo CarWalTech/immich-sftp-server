@@ -37,9 +37,15 @@ class DownloadSemaphore
 
     constructor(limit: number) { this.limit = limit; }
 
+    private get hasFreeSpace()
+    {
+        if (this.limit == 0) return true;
+        return this.running < this.limit;
+    }
+
     acquire(): Promise<void>
     {
-        if (this.running < this.limit)
+        if (this.hasFreeSpace)
         {
             this.running++;
             return Promise.resolve();
@@ -67,7 +73,15 @@ export class ImmichAPI
     private userSettings: UserConfig;
     private shouldLogoutSession = false;
     private readonly baseUrl;
-    private readonly downloadSemaphore = new DownloadSemaphore(config.maxConcurrentDLs);
+    // Shared across ALL connections — prevents N connections × M slots = N×M simultaneous downloads.
+    private static readonly downloadSemaphore = new DownloadSemaphore(config.maxConcurrentDLs);
+    // Global buffer cache for small assets. Buffer nodes are plain memory — safe to share across
+    // connections without ownership issues. Tmp-file nodes are NOT stored here (connection-local only).
+    private static readonly sharedBufferCache = new Map<string, VirtualContentBuffer>();
+    // In-flight deduplication: at most one active download per asset across ALL connections.
+    // Registration is synchronous (no await between get-check and set), so this is race-free
+    // under Node.js's single-threaded event loop.
+    private static readonly downloadsInFlight = new Map<string, Promise<VirtualContentBuffer>>();
 
     constructor(immich_url: string)
     {
@@ -386,35 +400,24 @@ export class ImmichAPI
     }
     public async FETCH_AlbumVirtualTree()
     {
-        return await this.cache.fetchCachedAlbumTree(`ROOT`, {
-            // Validate using album list metadata
-            fetchMeta: async () =>
-            {
-                const albums = await this.FETCH_Albums();
-                const first = albums[0];
-                return { updatedAt: first?.updatedAt };
-            },
+        let fetchedAlbums: ImmichAlbumDirectoryInfo[] | null = null;
+        const getAlbums = async () => { if (!fetchedAlbums) fetchedAlbums = await this.FETCH_Albums(); return fetchedAlbums; };
 
-            fetchData: async () =>
-            {
-                const albums = await this.FETCH_Albums();
-                return getVirtualAlbumTree(albums);
-            }
+        return await this.cache.fetchCachedAlbumTree(`ROOT`, {
+            fetchMeta: async () => { const albums = await getAlbums(); return { updatedAt: albums[0]?.updatedAt }; },
+            fetchData: async () => { const albums = await getAlbums(); return getVirtualAlbumTree(albums); }
         });
     }
     public async FETCH_AlbumVirtualBranch(path_id: string)
     {
-        return await this.cache.fetchCachedAlbumTree(`${path_id}`, {
-            fetchMeta: async () =>
-            {
-                const albums = await this.FETCH_Albums();
-                const first = albums[0];
-                return { updatedAt: first?.updatedAt };
-            },
+        let fetchedAlbums: ImmichAlbumDirectoryInfo[] | null = null;
+        const getAlbums = async () => { if (!fetchedAlbums) fetchedAlbums = await this.FETCH_Albums(); return fetchedAlbums; };
 
+        return await this.cache.fetchCachedAlbumTree(`${path_id}`, {
+            fetchMeta: async () => { const albums = await getAlbums(); return { updatedAt: albums[0]?.updatedAt }; },
             fetchData: async () =>
             {
-                const albums = await this.FETCH_Albums();
+                const albums = await getAlbums();
                 const tree = getVirtualAlbumTree(albums);
                 return findAlbumNode(tree, n => n.path_id === path_id) ?? undefined;
             }
@@ -457,28 +460,21 @@ export class ImmichAPI
     public async FETCH_AssetsForAlbum(album: ImmichAlbumDirectoryInfo, parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetFile[]>
     {
         const cacheKey = parent.fullpath;
-        return await this.cache.fetchedCachedAssetLists(cacheKey, {
-            // Validate using album metadata
-            fetchMeta: async () =>
-            {
-                const meta = await this.callApi({
-                    method: 'GET',
-                    endpoint: `albums/${album.id}`,
-                    logAction: '',
-                    skipResponseLog: true,
-                });
-                return { updatedAt: meta?.updatedAt };
-            },
+        // Single shared fetch avoids calling the album endpoint twice (once for meta
+        // validation, once for data) when cache is cold or stale.
+        let fetchedAlbumData: any = null;
+        const getAlbumData = async () =>
+        {
+            if (!fetchedAlbumData)
+                fetchedAlbumData = await this.callApi({ method: 'GET', endpoint: `albums/${album.id}`, logAction: 'Assets in album', skipResponseLog: true });
+            return fetchedAlbumData;
+        };
 
+        return await this.cache.fetchedCachedAssetLists(cacheKey, {
+            fetchMeta: async () => { const meta = await getAlbumData(); return { updatedAt: meta?.updatedAt }; },
             fetchData: async () =>
             {
-                const response = await this.callApi({
-                    method: 'GET',
-                    endpoint: `albums/${album.id}`,
-                    logAction: 'Assets in album',
-                    skipResponseLog: true,
-                });
-
+                const response = await getAlbumData();
                 applyAlbumDetails(album, response);
                 return await this.FETCH_AssetsByMetadata({ albumIds: [album.id], visibility: "timeline" }, { albumIds: [album.id], visibility: "archive" })
             },
@@ -749,8 +745,6 @@ export class ImmichAPI
             data: JSON.stringify({ ids: [assetId] }),
             logAction: 'Remove asset from album'
         });
-
-        this.cache.invalidateAlbumContents([album.id]);
     }
     async SERVER_CreateAlbum(albumName: string): Promise<string>
     {
@@ -772,8 +766,6 @@ export class ImmichAPI
             data: JSON.stringify({ ids: [assetId] }),
             logAction: 'Add asset to album'
         });
-
-        this.cache.invalidateAlbumContents([album_id]);
     }
     async SERVER_AddAssetToUnsorted(assetId: any)
     {
@@ -875,33 +867,76 @@ export class ImmichAPI
     }
     async SERVER_ReadAsset(asset: ImmichAsset): Promise<VirtualContentBuffer>
     {
-        // 1. Check cache
-        const cached = this.cache.assetFileBuffers.get(asset.id);
-        if (cached) return cached;
+        // 1. Fast-path: per-connection buffer cache
+        const localCached = this.cache.assetFileBuffers.get(asset.id);
+        if (localCached) return localCached;
 
-        // 2. Local mode (unchanged)
+        // 2. Local file mode — async read to avoid blocking the event loop.
+        //    Buffer is cached so subsequent accesses (multiple connections, re-reads) are instant.
         if (config.enableLocalFiles)
         {
             const filepath = "/immich" + asset.originalPath;
-            const buf = new VirtualContentBuffer(undefined, fs.readFileSync(filepath));
+            const data = await fs.promises.readFile(filepath);
+            const buf = new VirtualContentBuffer(undefined, data);
             this.cache.assetFileBuffers.set(asset.id, buf);
+            ImmichAPI.sharedBufferCache.set(asset.id, buf);
             return buf;
         }
 
-        // 3. Determine endpoint based on user's download source setting
+        // 3. Global buffer cache — plain memory, safe to share across connections
+        const sharedCached = ImmichAPI.sharedBufferCache.get(asset.id);
+        if (sharedCached) return sharedCached;
+
+        // 4. Determine endpoint
         const endpoint = this.userSettings.assetDownloadSource === 'preview'
             ? `assets/${asset.id}/preview`
             : `assets/${asset.id}/original`;
 
-        // 4. Acquire slot — prevents a directory full of files from all downloading
-        //    simultaneously, which exhausts bandwidth and triggers the 30s timeout.
-        await this.downloadSemaphore.acquire();
+        // 5. In-flight deduplication.
+        //    Node.js is single-threaded: there is no await between the get() check below and the
+        //    set() in step 6, so at most one download promise is ever registered per asset.
+        //    All concurrent callers for the same asset await the same promise.
+        const existingInflight = ImmichAPI.downloadsInFlight.get(asset.id);
+        if (existingInflight)
+        {
+            try
+            {
+                const result = await existingInflight;
+                // Buffer-backed: safe to share — removeCallback() is a no-op on plain memory.
+                if (result.isBuffer) return result;
+                // Tmp-backed: each connection must own its tmp file because session close calls
+                // removeCallback(), which would delete the file out from under other connections.
+                // Fall through to download a fresh copy now that the concurrent one has finished.
+            }
+            catch { /* primary failed — fall through to retry */ }
+        }
 
-        let node: VirtualContentBuffer;
+        // 6. No usable in-flight result — register our promise SYNCHRONOUSLY before the first
+        //    await, so any connection that calls get() after this point sees it immediately.
+        let resolveInflight!: (node: VirtualContentBuffer) => void;
+        let rejectInflight!: (err: unknown) => void;
+        const inflightPromise = new Promise<VirtualContentBuffer>((res, rej) =>
+        {
+            resolveInflight = res;
+            rejectInflight = rej;
+        });
+        ImmichAPI.downloadsInFlight.set(asset.id, inflightPromise);
+
+        // 7. Acquire a shared semaphore slot (static — all connections share the same N slots).
+        await ImmichAPI.downloadSemaphore.acquire();
+
         try
         {
-            // 5. Stream directly from Immich, bypassing callApi so we can read
-            //    Content-Length from the response headers before choosing storage.
+            // 8. Re-check shared cache inside the semaphore guard.
+            //    A connection that had to wait for a slot may find the asset was already downloaded.
+            const cachedAfterWait = ImmichAPI.sharedBufferCache.get(asset.id);
+            if (cachedAfterWait)
+            {
+                resolveInflight(cachedAfterWait);
+                return cachedAfterWait;
+            }
+
+            // 9. Stream from Immich so we can inspect Content-Length before choosing storage.
             const response = await axios.request({
                 method: 'GET',
                 url: `${this.baseUrl}/api/${endpoint}`,
@@ -920,14 +955,19 @@ export class ImmichAPI
 
             logger.debug(`ImmichAPI`, 'SERVER_ReadAsset', `Downloading ${asset.id} via ${endpoint}, Content-Length=${contentLength}`);
 
+            let node: VirtualContentBuffer;
             if (contentLength > config.maxCacheBufferSize)
             {
-                // Large file — stream to a temp file to avoid heap pressure.
-                // This is important when Dolphin (or similar) opens many large
-                // assets concurrently for thumbnailing.
+                // Large file — stream to a tmp file to avoid heap pressure.
                 const tmpFile = tmp.fileSync();
                 await pipeline(stream, createWriteStream(tmpFile.name));
                 node = new VirtualContentBuffer(tmpFile);
+
+                if (contentLength > 0 && node.size !== contentLength)
+                {
+                    node.removeCallback();
+                    throw new Error(`Truncated download for ${asset.id}: got ${node.size} of ${contentLength} bytes`);
+                }
             }
             else
             {
@@ -935,22 +975,33 @@ export class ImmichAPI
                 const chunks: Buffer[] = [];
                 for await (const chunk of stream) chunks.push(chunk as Buffer);
                 node = new VirtualContentBuffer(undefined, Buffer.concat(chunks));
+
+                if (contentLength > 0 && node.size !== contentLength)
+                    throw new Error(`Truncated download for ${asset.id}: got ${node.size} of ${contentLength} bytes`);
             }
+
+            // 10. Cache buffer nodes globally. Tmp nodes are NOT cached globally — session close
+            //     calls removeCallback() on them; a cross-connection cache entry would then point
+            //     at a deleted file.
+            if (node.isBuffer)
+            {
+                ImmichAPI.sharedBufferCache.set(asset.id, node);
+                this.cache.assetFileBuffers.set(asset.id, node);
+            }
+
+            resolveInflight(node);
+            return node;
+        }
+        catch (e)
+        {
+            rejectInflight(e);
+            throw e;
         }
         finally
         {
-            this.downloadSemaphore.release();
+            ImmichAPI.downloadSemaphore.release();
+            ImmichAPI.downloadsInFlight.delete(asset.id);
         }
-
-        // 6. Only cache buffer-backed nodes. Tmp-backed large-file nodes must NOT be cached
-        //    because SFTP_CLOSE calls removeCallback() to clean up the tmp file; a stale
-        //    cache entry pointing at a deleted tmp file causes read failures on re-open.
-        if (node.isBuffer)
-        {
-            this.cache.assetFileBuffers.set(asset.id, node);
-        }
-
-        return node;
     }
     async SERVER_UploadNode(path: string, node: VirtualContentBuffer, mtime: number)
     {

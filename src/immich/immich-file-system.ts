@@ -129,7 +129,9 @@ export class ImmichFileSystem implements VirtualFileSystem
         }
         else if (oldRes.name == newRes.name && oldRes.parent.fullpath != newRes.parent.fullpath)
         {
-            this.getCache().invalidateTree();
+            // Asset move: event handlers invalidate only what they touch.
+            // Directory move: full tree invalidation needed since album structure changes.
+            if (oldRes.node.isDir()) this.getCache().invalidateTree();
             return await oldRes.parent.event_movenode(oldRes.node, newRes.parent)
         }
         else
