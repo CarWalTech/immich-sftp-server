@@ -9,11 +9,11 @@ services:
     env_file:
       - .env
     ports:
-      - "22100:${SERVER_PORT_FTP}" # FTP
       - "22832:${SERVER_PORT_SFTP}" # SFTP
       - "19000:${SERVER_PORT_WEBDAV}" # WebDAV
     volumes:
       - ${SERVER_PATH_APPDATA}:/data
       - ${SERVER_PATH_APPCONFIG}:/config
       - ${SERVER_PATH_IMMICH_UPLOADS}:/immich/data
+      - ${SERVER_PATH_LOGS}:/logs
     restart: unless-stopped

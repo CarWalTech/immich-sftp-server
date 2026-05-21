@@ -229,47 +229,71 @@ export class ImmichAPI
     // #region Api Function
     public async callApi({ method, endpoint, data, logAction, respAsStream = false, skipResponseLog = false }: { method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', endpoint: string, data?: any, logAction: string, respAsStream?: boolean, skipResponseLog?: boolean }): Promise<any>
     {
-        try
+        const isDownload = method === 'GET' && endpoint.startsWith('assets/') && (endpoint.endsWith('/original') || endpoint.endsWith('/thumbnail'));
+
+        const maxRetries = 3;
+        let lastError: unknown;
+
+        for (let attempt = 0; attempt <= maxRetries; attempt++)
         {
-            logger.explicit(`ImmichAPI`, `${logAction}`, `Sending: ${method} /api/${endpoint}`);
+            try
+            {
+                logger.explicit(`ImmichAPI`, `${logAction}`, `Sending: ${method} /api/${endpoint}`);
 
-            const isDownload = method === 'GET' && endpoint.startsWith('assets/') && (endpoint.endsWith('/original') || endpoint.endsWith('/thumbnail'));
+                const response = await axios.request({
+                    method: method,
+                    url: `${this.baseUrl}/api/${endpoint}`,
+                    timeout: 30_000,
+                    headers: {
+                        ...(isDownload ? {} : { 'Accept': 'application/json' }),
+                        'User-Agent': 'ImmichNetworkStorage (Linux)',
+                        ...(this.authMode === 'api-key'
+                            ? { 'x-api-key': this.immichAccessToken }
+                            : { 'Authorization': `Bearer ${this.immichAccessToken}` }),
+                        ...(data instanceof FormData ? data.getHeaders?.() : { 'Content-Type': 'application/json' }),
+                    },
+                    data: data ?? undefined,
 
-            const response = await axios.request({
-                method: method,
-                url: `${this.baseUrl}/api/${endpoint}`,
-                timeout: 30_000,
-                headers: {
-                    ...(isDownload ? {} : { 'Accept': 'application/json' }),
-                    'User-Agent': 'ImmichNetworkStorage (Linux)',
-                    ...(this.authMode === 'api-key'
-                        ? { 'x-api-key': this.immichAccessToken }
-                        : { 'Authorization': `Bearer ${this.immichAccessToken}` }),
-                    ...(data instanceof FormData ? data.getHeaders?.() : { 'Content-Type': 'application/json' }),
-                },
-                data: data ?? undefined,
+                    // stream = Streaming requested for download
+                    // arraybuffer = Download requested without streaming
+                    // json = Default for all other requests
+                    responseType: respAsStream ? 'stream' : (isDownload ? 'arraybuffer' : 'json'),
+                });
 
-                // stream = Streaming requested for download
-                // arraybuffer = Download requested without streaming
-                // json = Default for all other requests
-                responseType: respAsStream ? 'stream' : (isDownload ? 'arraybuffer' : 'json'),
-            });
+                if (skipResponseLog == true)
+                    logger.explicit(`ImmichAPI`, `${logAction}`, `Received (${logAction}):`, response.status, '[Data skipped]');
+                else
+                    logger.explicit(`ImmichAPI`, `${logAction}`, `Received:`, response.status, this.filterLogData(response.data));
+                return response.data;
+            }
+            catch (err)
+            {
+                lastError = err;
 
+                const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+                const isRetryable = status === 429 || status === 502 || status === 503 || status === 504;
 
-            if (skipResponseLog == true)
-                logger.explicit(`ImmichAPI`, `${logAction}`, `Received (${logAction}):`, response.status, '[Data skipped]');
-            else
-                logger.explicit(`ImmichAPI`, `${logAction}`, `Received:`, response.status, this.filterLogData(response.data));
-            return response.data;
+                if (isRetryable && attempt < maxRetries)
+                {
+                    // Exponential back-off: 2 s → 4 s → 8 s (± up to 500 ms jitter)
+                    const delay = Math.min(2000 * Math.pow(2, attempt), 30_000) + Math.random() * 500;
+                    logger.warn(`ImmichAPI`, `${logAction}`, `HTTP ${status} – retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries})`);
+                    await new Promise<void>(r => setTimeout(r, delay));
+                    continue;
+                }
+
+                break;
+            }
         }
-        catch (restoreError)
-        {
-            if (axios.isAxiosError(restoreError))
-                logger.error(`ImmichAPI`, `${logAction}`, `Axios error (${logAction}):`, restoreError.response?.data || restoreError.message);
+
+        if (axios.isAxiosError(lastError))
+            if ((lastError as any).response)
+                logger.error(`ImmichAPI`, `${logAction}`, `Axios error (${logAction}):`, JSON.stringify((lastError as any).response.data));
             else
-                logger.error(`ImmichAPI`, `${logAction}`, `Unknown error during http request (${logAction}):`, restoreError);
-            throw restoreError;
-        }
+                logger.error(`ImmichAPI`, `${logAction}`, `Axios error (${logAction}):`, (lastError as any).message);
+        else
+            logger.error(`ImmichAPI`, `${logAction}`, `Unknown error during http request (${logAction}):`, lastError);
+        throw lastError;
     }
     // #endregion
 

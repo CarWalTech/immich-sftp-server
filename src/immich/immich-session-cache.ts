@@ -120,7 +120,7 @@ export class ImmichSessionCache
             })();
 
             this.inFlightListFetches.set(cacheKey, assetPromise);
-            assetPromise.finally(() => this.inFlightListFetches.delete(cacheKey));
+            assetPromise.finally(() => this.inFlightListFetches.delete(cacheKey)).catch(() => {});
         }
 
         // Build fresh file nodes for this connection from the shared raw assets.
@@ -171,7 +171,7 @@ export class ImmichSessionCache
         })();
 
         this.inFlightTreeFetches.set(cacheKey, promise);
-        promise.finally(() => this.inFlightTreeFetches.delete(cacheKey));
+        promise.finally(() => this.inFlightTreeFetches.delete(cacheKey)).catch(() => {});
         return promise;
     }
 

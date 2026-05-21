@@ -65,16 +65,13 @@ export class Config
   immichUserDefaults: UserConfig
 
   // server protocols
-  enableFTP: boolean
   enableSFTP: boolean
   enableWebDAV: boolean
 
   // server hostname
   serverHost: string
-  serverHostPassiveFTP?: string
 
   // server ports
-  portFTP: number
   portSFTP: number
   portWebDAV: number
   portPassiveFTP?: NumberRange
@@ -102,19 +99,15 @@ export class Config
     this.immichUserDefaults = UserConfigLoader.DEFAULTS
 
     // server modes
-    this.enableFTP = getEnvBoolean('SERVER_ENABLE_FTP', false);
     this.enableSFTP = getEnvBoolean('SERVER_ENABLE_SFTP', true);
     this.enableWebDAV = getEnvBoolean('SERVER_ENABLE_WEBDAV', false);
 
     // server hostname
     this.serverHost = getEnvOrDefault('SERVER_HOST', '0.0.0.0');
-    this.serverHostPassiveFTP = getOptionalEnv('SERVER_HOST_FTP_PASSIVE');
 
     // server ports
-    this.portFTP = getEnvNumber('SERVER_PORT_FTP', 21);
     this.portSFTP = getEnvNumber('SERVER_PORT_SFTP', 22);
     this.portWebDAV = getEnvNumber('SERVER_PORT_WEBDAV', 1900);
-    this.portPassiveFTP = getOptionalEnvNumberRange('SERVER_PORT_FTP_PASSIVE_MIN', 'SERVER_PORT_FTP_PASSIVE_MAX');
 
     // server settings
     this.enableLocalFiles = getEnvBoolean('SERVER_OPTION_ENABLE_LOCAL_FILES', false);

@@ -3,7 +3,7 @@ import { config } from '../config';
 import tmp from 'tmp';
 import { ImmichAPI } from "./immich-api";
 import { VirtualDirectory } from "../filesystem/virtual-directory";
-import { VirtualPathInfo } from "../filesystem/virtual-path-info";
+import type { VirtualPathInfo } from "../filesystem/virtual-path-info";
 import { VirtualFile } from "../filesystem/virtual-file";
 import { ImmichRootDirectory } from "./collections/immich-root-directory";
 import { ImmichWritableMemory } from "./immich-writable-memory";
@@ -43,14 +43,11 @@ export class ImmichFileSystem implements VirtualFileSystem
         await this.immichApi.logout();
         await this.root.event_logout();
     }
-    async setAttributes(filename: string, mtime: number)
+    async setAttributes(_filename: string, _mtime: number)
     {
-        const { parent, node, name } = await VirtualFsUtils.resolvePath(this.root, filename);
-        if (node)
-        {
-            //TODO: Set Attributes Better Implementation
-            //await node.event_setattr({ mtime: mtime })
-        }
+        // No-op: mtime/chmod from SFTP clients (e.g. post-upload SETSTAT) is not
+        // meaningful for Immich-backed files. Skipping resolvePath avoids triggering
+        // a cache rebuild (and a FETCH_Albums call) immediately after every upload.
     }
     async listFiles(currentDir: string)
     {
