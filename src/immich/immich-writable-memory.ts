@@ -201,17 +201,14 @@ export class ImmichWritableMemory
             if (wasPart && !isPart)
             {
                 // FINALIZE: .part → real file
-                const dir = path.posix.dirname(newName);
-                const base = path.posix.basename(newName);
-
-                // Remove from tmp list
-                this.entries_tmp.splice(fileIndex, 1);
-
-                // Hand off to real write path
+                // writeFile first — if it throws the entry stays in entries_tmp so
+                // a retry is still possible and the data is not silently lost.
                 await this.immich_fs.writeFile(newName, mem.tmpFile);
 
-                logger.info("ImmichWritableMemory", "Finalize", `Promoted .part ${oldName} -> ${newName} and wrote to backend`
-                );
+                // Only remove from tmp list after the write has been accepted.
+                this.entries_tmp.splice(fileIndex, 1);
+
+                logger.info("ImmichWritableMemory", "Finalize", `Promoted .part ${oldName} -> ${newName} and wrote to backend`);
 
                 return true;
             }

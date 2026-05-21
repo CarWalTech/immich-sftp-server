@@ -1,6 +1,8 @@
 import path from "path";
 import { BaseLogger, ILogObjMeta, ISettingsParam, ILogObj, Logger } from "tslog";
 import { getEnvBoolean } from "./utils/env-utils";
+import { createStream } from "rotating-file-stream";
+
 
 const IGNORED_COMBINATIONS: Record<string, string[]> = {}
 
@@ -10,6 +12,43 @@ const ENABLE_WARN_LOGS = getEnvBoolean('SERVER_LOGS_WARN', true)
 const ENABLE_ERROR_LOGS = getEnvBoolean('SERVER_LOGS_ERROR', true)
 const ENABLE_EXPLICIT_LOGS = getEnvBoolean('SERVER_LOGS_EXPLICIT', false)
 
+
+const fileGenerator = (time: any, index: any) =>
+{
+    const pad = (num: number) => (num > 9 ? "" : "0") + num;
+
+    if (time == null) return "runtime.log";
+    var date = (time as Date)
+    var month = date.getFullYear() + "" + pad(date.getMonth() + 1);
+    var day = pad(date.getDate());
+    var hour = pad(date.getHours());
+    var minute = pad(date.getMinutes());
+    return `logs/runtime-${month}${day}-${hour}${minute}-${index}.log`;
+};
+
+const fileStream = createStream(fileGenerator, {
+    size: "10M",
+    interval: "1d",
+    maxFiles: 10,
+});
+
+const fileTransport = (logObj: any) =>
+{
+    var object = JSON.parse(JSON.stringify(logObj))
+    const argCount = Object.entries(object).length - 1
+
+    var meta = object["_meta"]
+    var date = meta["date"]
+    var logLevelName = meta["logLevelName"]
+    var fullFilePath = meta["path"]["fullFilePath"]
+    var output = ""
+    for (var i = 0; i < argCount; i++)
+    {
+        output += object[`${i}`]
+        if (i + 1 < argCount) output += " "
+    }
+    fileStream.write(`${date} ${logLevelName}    [${fullFilePath}]\n${output}\n`);
+};
 
 export class CustomLogger<LogObj> extends BaseLogger<LogObj>
 {
@@ -94,7 +133,6 @@ export class CustomLogger<LogObj> extends BaseLogger<LogObj>
         return super.log(6, "EXPLICIT", ...args)
     }
 }
-const srcFilename = path.join(__dirname, "../");
 
 export const logger = new CustomLogger({
     minLevel: 0,
@@ -126,3 +164,5 @@ export const logger = new CustomLogger({
         errorName: ["bold", "bgRedBright", "whiteBright"]
     }
 });
+
+logger.attachTransport(fileTransport);

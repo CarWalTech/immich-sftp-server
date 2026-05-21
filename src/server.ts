@@ -5,9 +5,8 @@ import type { TransferProtocolServer } from './protocols/transfer-protocol-serve
 
 async function startServers(): Promise<void>
 {
-  const [{ config }, { FtpProtocolServer }, { SftpProtocolServer }, { WebdavProtocolServer }] = await Promise.all([
+  const [{ config }, { SftpProtocolServer }, { WebdavProtocolServer }] = await Promise.all([
     import('./config'),
-    import('./protocols/ftp-server'),
     import('./protocols/sftp-server'),
     import('./protocols/webdav-server'),
   ]);
@@ -17,10 +16,6 @@ async function startServers(): Promise<void>
   {
     servers.push(new SftpProtocolServer());
   }
-  if (config.enableFTP)
-  {
-    servers.push(new FtpProtocolServer());
-  }
   if (config.enableWebDAV)
   {
     servers.push(new WebdavProtocolServer());
@@ -28,7 +23,7 @@ async function startServers(): Promise<void>
 
   if (servers.length === 0)
   {
-    throw new Error('No transfer protocol enabled. Set SERVER_ENABLE_SFTP, SERVER_ENABLE_FTP and/or SERVER_ENABLE_WEBDAV (accepted values: true/1/yes/on or false/0/no/off).');
+    throw new Error('No transfer protocol enabled. Set SERVER_ENABLE_SFTP and/or SERVER_ENABLE_WEBDAV (accepted values: true/1/yes/on or false/0/no/off).');
   }
 
   await Promise.all(servers.map((server) => server.start()));

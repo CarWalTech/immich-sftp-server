@@ -3,3 +3,5 @@
 /node_modules
 /.env
 /readme-git.md
+/logs
+/runtime.log
