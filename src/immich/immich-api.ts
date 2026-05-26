@@ -20,10 +20,10 @@ import { isObjectWithId } from "../utils/common-utils";
 import { logger } from '../logger';
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
 import { VirtualContentBufferUtils } from "../filesystem/virtual-content-buffer";
-import { ImmichCachedEntry, ImmichSessionCache } from './immich-session-cache';
+import { ImmichCachedEntry, ImmichSessionCache } from './cache/immich-session-cache';
 import { ImmichVirtualAssetFile } from './collections/immich-virtual-asset-file';
 import { ImmichAlbumFolder } from './collections/immich-album-folder';
-import { ImmichVirtualDirectory } from './collections/immich-virtual-directory';
+import { ImmichVirtualAssetItem, ImmichVirtualDirectory } from './collections/immich-virtual-directory';
 import { DateUtils } from '../utils/date-utils';
 
 /**
@@ -385,6 +385,25 @@ export class ImmichAPI
     // #endregion
 
     // #region Fetch Methods
+
+    public async FETCH_Asset(asset_id: string): Promise<ImmichAsset>
+    {
+        let fetched: ImmichAsset | null = null;
+        const getAsset = async () =>
+        {
+            if (!fetched)
+            {
+                const response = await this.callApi({ method: 'GET', endpoint: `assets/${asset_id}`, logAction: 'Get asset', skipResponseLog: true });
+                fetched = mapAssetFromApi(response);
+            }
+            return fetched;
+        };
+
+        return this.cache.fetchCachedAsset(asset_id, {
+            fetchMeta: async () => { const asset = await getAsset(); return { updatedAt: asset.updatedAt }; },
+            fetchData: async () => getAsset(),
+        });
+    }
     public async FETCH_Albums(): Promise<ImmichAlbumDirectoryInfo[]>
     {
         const [ownAlbumsResponse] = await Promise.all([
@@ -447,8 +466,7 @@ export class ImmichAPI
             }
         });
     }
-
-    public async FETCH_AssetsForNonAlbums(parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetFile[]>
+    public async FETCH_AssetsForNonAlbums(parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetItem[]>
     {
         const cacheKey = parent.fullpath;
 
@@ -464,7 +482,7 @@ export class ImmichAPI
             buildFiles: (assets) => mapFilesFromAssets(assets, parent, reserved_names)
         });
     }
-    public async FETCH_AssetsForTrash(parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetFile[]>
+    public async FETCH_AssetsForTrash(parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetItem[]>
     {
         const cacheKey = parent.fullpath;
 
@@ -481,7 +499,7 @@ export class ImmichAPI
             buildFiles: (assets) => mapFilesFromAssets(assets, parent, reserved_names)
         });
     }
-    public async FETCH_AssetsForAlbum(album: ImmichAlbumDirectoryInfo, parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetFile[]>
+    public async FETCH_AssetsForAlbum(album: ImmichAlbumDirectoryInfo, parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetItem[]>
     {
         const cacheKey = parent.fullpath;
         // Single shared fetch avoids calling the album endpoint twice (once for meta
@@ -505,7 +523,7 @@ export class ImmichAPI
             buildFiles: (assets) => mapFilesFromAssets(assets, parent, reserved_names)
         });
     }
-    public async FETCH_AssetsForTag(tag: ImmichTagDirectoryInfo, parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetFile[]>
+    public async FETCH_AssetsForTag(tag: ImmichTagDirectoryInfo, parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetItem[]>
     {
         const cacheKey = parent.fullpath;
         return await this.cache.fetchedCachedAssetLists(cacheKey, {
@@ -545,6 +563,8 @@ export class ImmichAPI
                         size: 1000,
                         withDeleted: false,
                         withExif: true,
+                        withStacked: true,
+                        withPeople: true
                     }),
                     logAction: 'Search assets',
                     skipResponseLog: true,
@@ -553,7 +573,8 @@ export class ImmichAPI
                 const items = Array.isArray(response?.assets?.items) ? response.assets.items : [];
                 for (const item of items)
                 {
-                    const asset = mapAssetFromApi(item);
+                    const actual_item = this.FETCH_Asset(item.id)
+                    const asset = mapAssetFromApi(actual_item);
                     byAssetId.set(asset.id, asset);
                 }
 
@@ -587,9 +608,11 @@ export class ImmichAPI
         }
         return tags;
     }
+
     // #endregion
 
     // #region Queue Functions
+
     public QUEUE_List()
     {
         return this.uploadQueue
@@ -716,10 +739,11 @@ export class ImmichAPI
             node.removeCallback();
         }
     }
+
     // #endregion
 
     // #region Server Functions
-    // DELETE
+
     async SERVER_DeleteAsset(asset: ImmichAsset)
     {
         const result = await this.callApi({

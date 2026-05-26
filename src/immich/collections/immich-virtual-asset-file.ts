@@ -9,7 +9,7 @@ import { getAssetMtime, ImmichAlbumBase } from "../utils/immich-api-utils";
 import { ALBUM_BROWSER_LINK_FILE_NAME, ALBUM_METADATA_FILE_NAME } from "../utils/immich-metadata-utils";
 import { ImmichAsset } from "../utils/immich-api-utils";
 import { deleteAssetFromContainer } from "../utils/immich-fs-utils";
-import { ImmichSessionCache } from "../immich-session-cache";
+import { ImmichSessionCache } from "../cache/immich-session-cache";
 
 export class ImmichVirtualAssetFile extends VirtualFile
 {
@@ -33,6 +33,11 @@ export class ImmichVirtualAssetFile extends VirtualFile
     get asset_id()
     {
         return this.asset.id
+    }
+
+    get fs()
+    {
+        return this.file_system
     }
 
     async event_delete(): Promise<boolean>

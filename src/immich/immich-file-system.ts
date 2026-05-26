@@ -6,11 +6,11 @@ import { VirtualDirectory } from "../filesystem/virtual-directory";
 import type { VirtualPathInfo } from "../filesystem/virtual-path-info";
 import { VirtualFile } from "../filesystem/virtual-file";
 import { ImmichRootDirectory } from "./collections/immich-root-directory";
-import { ImmichWritableMemory } from "./immich-writable-memory";
+import { ImmichUploadCache } from "./cache/immich-upload-cache";
 import { VirtualFsUtils } from "../utils/virtual-fs-utils";
 import { logger } from "../logger";
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
-import { ImmichSessionCache } from "./immich-session-cache";
+import { ImmichSessionCache } from "./cache/immich-session-cache";
 import { PathUtils } from "../utils/path-utils";
 import { VirtualNode } from "../filesystem/virtual-node";
 import { ImmichVirtualAssetFile } from "./collections/immich-virtual-asset-file";
@@ -22,13 +22,13 @@ export class ImmichFileSystem implements VirtualFileSystem
 {
     private immichApi: ImmichAPI
     private root: ImmichRootDirectory
-    memory: ImmichWritableMemory
+    memory: ImmichUploadCache
 
     constructor()
     {
         this.root = new ImmichRootDirectory(this);
         this.immichApi = new ImmichAPI(config.immichHost.replace(/\/+$/, ''));
-        this.memory = new ImmichWritableMemory(this);
+        this.memory = new ImmichUploadCache(this);
     }
 
 

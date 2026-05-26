@@ -10,7 +10,7 @@ import { ImmichRootDirectory } from "./immich-root-directory";
 import { ALBUM_BROWSER_LINK_FILE_NAME, ALBUM_METADATA_FILE_NAME } from "../utils/immich-metadata-utils";
 import tmp from 'tmp';
 import { VirtualContentBufferUtils } from "../../filesystem/virtual-content-buffer";
-import { saveAlbumMetadataFileContent, buildAlbumBrowserLinkForAlbum, buildAlbumMetadataYamlForAlbum } from "../utils/immich-metadata-utils";
+import { saveAlbumMetadataFileContent, buildAlbumBrowserLink, buildAlbumMetadataUserYaml } from "../utils/immich-metadata-utils";
 import { ImmichAlbumFolder } from "./immich-album-folder";
 import { ImmichAlbumDirectoryInfo } from '../utils/immich-api-utils';
 import fs from 'fs';

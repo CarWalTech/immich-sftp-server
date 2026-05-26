@@ -10,7 +10,7 @@ import { ImmichRootDirectory } from "./immich-root-directory";
 import { ALBUM_BROWSER_LINK_FILE_NAME, ALBUM_METADATA_FILE_NAME } from "../utils/immich-metadata-utils";
 import tmp from 'tmp';
 import { VirtualContentBufferUtils } from "../../filesystem/virtual-content-buffer";
-import { saveAlbumMetadataFileContent, buildAlbumBrowserLinkForAlbum, buildAlbumMetadataYamlForAlbum } from "../utils/immich-metadata-utils";
+import { saveAlbumMetadataFileContent, buildAlbumBrowserLink, buildAlbumMetadataUserYaml } from "../utils/immich-metadata-utils";
 import { ImmichAlbumFolder } from "./immich-album-folder";
 import { ImmichAlbumDirectoryInfo } from '../utils/immich-api-utils';
 import fs from 'fs';
@@ -43,13 +43,13 @@ export class ImmichAlbumMetadataFile extends VirtualFile
     }
     async event_stat(): Promise<VirtualMetadata>
     {
-        const metadata = buildAlbumMetadataYamlForAlbum(this.album, this.file_system.getCurrentUser(), this.file_system.getUrl());
+        const metadata = buildAlbumMetadataUserYaml(this.album, this.file_system.getCurrentUser(), this.file_system.getUrl());
         return VirtualMetadata.file_rw(this.name, Buffer.byteLength(metadata, 'utf8'), getAlbumMtime(this.album));
     }
     async event_readfile(): Promise<VirtualContentBuffer>
     {
         await this.file_system.getApi().FETCH_AssetsForAlbum(this.album, this.album_folder);
-        return VirtualContentBufferUtils.bufferFromString(buildAlbumMetadataYamlForAlbum(this.album, this.file_system.getCurrentUser(), this.file_system.getUrl()));
+        return VirtualContentBufferUtils.bufferFromString(buildAlbumMetadataUserYaml(this.album, this.file_system.getCurrentUser(), this.file_system.getUrl()));
     }
     async event_writefile(contents: VirtualContentBuffer): Promise<boolean>
     {
