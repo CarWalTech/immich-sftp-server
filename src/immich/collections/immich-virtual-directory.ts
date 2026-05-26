@@ -1,6 +1,10 @@
 import { VirtualDirectory, VirtualDirectoryOptions } from "../../filesystem/virtual-directory";
 import { VirtualNode } from "../../filesystem/virtual-node";
 import { ImmichFileSystem } from "../immich-file-system";
+import { ImmichVirtualAssetFile } from "./immich-virtual-asset-file";
+import { ImmichVirtualAssetSidecar } from "./immich-virtual-asset-sidecar";
+
+export type ImmichVirtualAssetItem = ImmichVirtualAssetFile | ImmichVirtualAssetSidecar
 
 export class ImmichVirtualDirectory extends VirtualDirectory
 {

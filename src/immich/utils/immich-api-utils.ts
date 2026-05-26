@@ -1,10 +1,11 @@
 import { isObject } from "../../utils/common-utils";
 import { PathUtils } from "../../utils/path-utils";
 import { ImmichAlbumFolder } from "../collections/immich-album-folder";
-import { ImmichVirtualDirectory } from "../collections/immich-virtual-directory";
+import { ImmichVirtualAssetItem, ImmichVirtualDirectory } from "../collections/immich-virtual-directory";
 import { ImmichVirtualAssetFile } from "../collections/immich-virtual-asset-file";
 import { logger } from "../../logger";
 import { DateUtils } from "../../utils/date-utils";
+import { ImmichVirtualAssetSidecar } from "../collections/immich-virtual-asset-sidecar";
 
 export interface ImmichAlbumUser
 {
@@ -20,15 +21,43 @@ export interface ImmichUser
 }
 export interface ImmichAsset
 {
-    id: string;
-    originalFileName: string;
-    originalPath: string;
-    createdAt?: string;
-    updatedAt?: string;
+    checksum: string;
+    createdAt: string;
+    deviceAssetId: string;
+    deviceId: string,
+    duplicateId?: string,
+    duration: string,
+    exifInfo?: any,
     fileCreatedAt: string;
     fileModifiedAt: string;
-    fileSizeInByte: number;
+    hasMetadata: boolean,
+    height?: number,
+    id: string;
+    isArchived: boolean,
+    isEdited: boolean,
+    isFavorite: boolean,
+    isOffline: boolean,
     isTrashed: boolean;
+    libraryId?: string,
+    livePhotoVideoId?: string,
+    localDateTime?: string,
+    originalFileName: string;
+    originalMimeType?: string,
+    originalPath: string;
+    owner?: any,
+    ownerId: string,
+    people?: any,
+    resized?: boolean,
+    stack?: any,
+    tags?: any,
+    thumbhash?: string,
+    type: string,
+    unassignedFaces?: any,
+    updatedAt?: string,
+    visibility: string,
+    width?: number,
+
+    fileSizeInByte: number;
 }
 export interface ImmichAlbumApiResponse
 {
@@ -333,18 +362,46 @@ export function mapAssetFromApi(asset: any): ImmichAsset
         logger.warn('ImmichAssetUtils', 'getAssetMtime', `Asset ${asset.originalFileName} (${asset.id}) has no exifInfo.fileSizeInByte, using 0 as fallback.`);
     }
     return {
-        id: asset.id,
-        originalFileName: asset.originalFileName,
+        checksum: asset.checksum,
         createdAt: asset.createdAt,
-        updatedAt: asset.updatedAt,
-        originalPath: asset.originalPath,
+        deviceAssetId: asset.deviceAssetId,
+        deviceId: asset.deviceId,
+        duplicateId: asset.duplicateId,
+        duration: asset.duration,
+        exifInfo: asset.exifInfo,
         fileCreatedAt: asset.fileCreatedAt,
         fileModifiedAt: asset.fileModifiedAt,
+        hasMetadata: asset.hasMetadata,
+        height: asset.height,
+        id: asset.id,
+        isArchived: asset.isArchived,
+        isEdited: asset.isEdited,
+        isFavorite: asset.isFavorite,
+        isOffline: asset.isOffline,
+        isTrashed: asset.isTrashed,
+        libraryId: asset.libraryId,
+        livePhotoVideoId: asset.livePhotoVideoId,
+        localDateTime: asset.localDateTime,
+        originalFileName: asset.originalFileName,
+        originalMimeType: asset.originalMimeType,
+        originalPath: asset.originalPath,
+        owner: asset.owner,
+        ownerId: asset.ownerId,
+        people: asset.people,
+        resized: asset.resized,
+        stack: asset.stack,
+        tags: asset.tags,
+        thumbhash: asset.thumbhash,
+        type: asset.type,
+        unassignedFaces: asset.unassignedFaces,
+        updatedAt: asset.updatedAt,
+        visibility: asset.visibility,
+        width: asset.width,
+
         fileSizeInByte: asset.exifInfo?.fileSizeInByte ?? 0,
-        isTrashed: asset.isTrashed
     };
 }
-export function mapFilesFromAssets(assets: ImmichAsset[], parent: ImmichVirtualDirectory, reserved_names?: Set<string>): ImmichVirtualAssetFile[]
+export function mapFilesFromAssets(assets: ImmichAsset[], parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Array<ImmichVirtualAssetItem>
 {
     function buildUniqueName(base: string, extension: string, reserved: Set<string>, nameCount: Map<string, number>): string
     {
@@ -374,16 +431,24 @@ export function mapFilesFromAssets(assets: ImmichAsset[], parent: ImmichVirtualD
         return finalName;
     }
 
-    const files = new Array<ImmichVirtualAssetFile>(assets.length);
+    const enableSidecars = false;
+
+    const files = new Array<ImmichVirtualAssetItem>(enableSidecars ? assets.length * 2 : assets.length);
     const reservedNames = reserved_names ?? new Set<string>();
     const nameCount = new Map<string, number>();
 
+
     for (let i = 0; i < assets.length; i++)
     {
+
         const asset = assets[i];
         const [name, ext] = parent.file_system.getApi().getAssetDisplayName(asset);
         const finalName = buildUniqueName(name, ext, reservedNames, nameCount);
-        files[i] = new ImmichVirtualAssetFile(asset, finalName, parent, parent.file_system);
+
+
+        const idx = enableSidecars ? i * 2 : i;
+        files[idx] = new ImmichVirtualAssetFile(asset, finalName, parent, parent.file_system);
+        if (enableSidecars) files[idx + 1] = new ImmichVirtualAssetSidecar(asset, finalName + ".xmp", parent, parent.file_system);
     }
 
     return files;

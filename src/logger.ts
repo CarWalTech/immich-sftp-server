@@ -165,4 +165,4 @@ export const logger = new CustomLogger({
     }
 });
 
-logger.attachTransport(fileTransport);
+//logger.attachTransport(fileTransport);

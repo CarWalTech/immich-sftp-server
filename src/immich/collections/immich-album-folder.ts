@@ -16,6 +16,7 @@ import { ImmichVirtualDirectory } from "./immich-virtual-directory";
 import { logger } from "../../logger";
 import { ImmichAlbumMetadataFile } from "./immich-album-metadata";
 import { DateUtils } from "../../utils/date-utils";
+import { ImmichVirtualAssetSidecar } from "./immich-virtual-asset-sidecar";
 
 export class ImmichAlbumFolder extends ImmichVirtualDirectory 
 {
@@ -150,7 +151,11 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
             var reserved_names = Array.from(sub_folders.keys()).concat(Array.from(metadata_files.keys()))
             var assets = await this.file_system.getApi().FETCH_AssetsForAlbum(this.node_data.album, this, new Set(reserved_names));
             var asset_files = new Map(assets.map(asset => ([asset.name, asset as VirtualNode])))
-            return new Map([...Array.from(sub_folders.entries()), ...Array.from(metadata_files.entries()), ...Array.from(asset_files.entries())]);
+            return new Map([
+                ...Array.from(sub_folders.entries()),
+                ...Array.from(metadata_files.entries()),
+                ...Array.from(asset_files.entries())
+            ]);
         }
         else
         {

@@ -1,17 +1,17 @@
 import fs from 'fs';
 import tmp from 'tmp';
-import { VirtualMetadata } from '../filesystem/virtual-metadata';
-import { ImmichFileSystem } from "./immich-file-system";
-import { ImmichUploadItem } from "./immich-api";
-import { ImmichAlbumDirectoryInfo } from './utils/immich-api-utils';
+import { VirtualMetadata } from '../../filesystem/virtual-metadata';
+import { ImmichFileSystem } from "../immich-file-system";
+import { ImmichUploadItem } from "../immich-api";
+import { ImmichAlbumDirectoryInfo } from '../utils/immich-api-utils';
 import path from "path";
-import { logger } from '../logger';
-import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
-import { DateUtils } from '../utils/date-utils';
+import { logger } from '../../logger';
+import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
+import { DateUtils } from '../../utils/date-utils';
 
 
 
-export class ImmichWritableMemory
+export class ImmichUploadCache
 {
     private immich_fs: ImmichFileSystem
     private entries_tmp: MemoryEntry[] = [];
