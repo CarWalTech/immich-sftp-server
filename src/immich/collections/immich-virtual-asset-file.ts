@@ -9,7 +9,6 @@ import { getAssetMtime, ImmichAlbumBase } from "../utils/immich-api-utils";
 import { ALBUM_BROWSER_LINK_FILE_NAME, ALBUM_METADATA_FILE_NAME } from "../utils/immich-metadata-utils";
 import { ImmichAsset } from "../utils/immich-api-utils";
 import { deleteAssetFromContainer } from "../utils/immich-fs-utils";
-import { ImmichSessionCache } from "../cache/immich-session-cache";
 
 export class ImmichVirtualAssetFile extends VirtualFile
 {
@@ -49,22 +48,9 @@ export class ImmichVirtualAssetFile extends VirtualFile
     {
         const api = this.file_system.getApi();
         let size: number;
-
-        if (api.getUserSettings().assetDownloadSource === 'preview')
-        {
-            // In preview mode report the preview image size so clients (e.g. Dolphin)
-            // don't skip thumbnail generation due to a large original file size.
-            size = await api.SERVER_GetAssetPreviewSize(this.asset);
-            if (size === 0) size = this.asset.fileSizeInByte; // fallback if HEAD fails
-        }
-        else
-        {
-            // fileSizeInByte is 0 when Immich has no exifInfo for the asset.
-            // Fall back to the download/info endpoint which asks Immich for the actual size.
-            size = this.asset.fileSizeInByte > 0
-                ? this.asset.fileSizeInByte
-                : await api.SERVER_GetAssetFileSize(this.asset);
-        }
+        size = this.asset.fileSizeInByte > 0
+            ? this.asset.fileSizeInByte
+            : await api.SERVER_GetAssetFileSize(this.asset);
 
         return VirtualMetadata.file_ro(this.name, size, getAssetMtime(this.asset));
     }

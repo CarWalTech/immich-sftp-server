@@ -573,7 +573,7 @@ export class ImmichAPI
                 const items = Array.isArray(response?.assets?.items) ? response.assets.items : [];
                 for (const item of items)
                 {
-                    const actual_item = this.FETCH_Asset(item.id)
+                    const actual_item = await this.FETCH_Asset(item.id)
                     const asset = mapAssetFromApi(actual_item);
                     byAssetId.set(asset.id, asset);
                 }
@@ -832,44 +832,43 @@ export class ImmichAPI
             skipResponseLog: true,
         });
     }
-    async SERVER_GetAssetPreviewSize(asset: ImmichAsset): Promise<number>
-    {
-        const cached = this.cache.assetPreviewSizes.get(asset.id);
-        if (cached !== undefined) return cached;
-
-        try
-        {
-            const response = await axios.request({
-                method: 'HEAD',
-                url: `${this.baseUrl}/api/assets/${asset.id}/preview`,
-                timeout: 10_000,
-                headers: {
-                    'User-Agent': 'ImmichNetworkStorage (Linux)',
-                    ...(this.authMode === 'api-key'
-                        ? { 'x-api-key': this.immichAccessToken }
-                        : { 'Authorization': `Bearer ${this.immichAccessToken}` }),
-                },
-            });
-            const size = parseInt(response.headers['content-length'] ?? '0', 10) || 0;
-            this.cache.assetPreviewSizes.set(asset.id, size);
-            return size;
-        }
-        catch
-        {
-            return 0;
-        }
-    }
     async SERVER_GetAssetFileSize(asset: ImmichAsset): Promise<number>
     {
-        const cached = this.cache.assetFileSizes.get(asset.id);
+        const download_source = this.getUserSettings().assetDownloadSource
+        const cached = this.cache.assetFileSizeCache.get(asset.id, download_source);
         if (cached !== undefined) return cached;
+
+        if (download_source == "preview")
+        {
+            try
+            {
+                const response = await axios.request({
+                    method: 'HEAD',
+                    url: `${this.baseUrl}/api/assets/${asset.id}/preview`,
+                    timeout: 10_000,
+                    headers: {
+                        'User-Agent': 'ImmichNetworkStorage (Linux)',
+                        ...(this.authMode === 'api-key'
+                            ? { 'x-api-key': this.immichAccessToken }
+                            : { 'Authorization': `Bearer ${this.immichAccessToken}` }),
+                    },
+                });
+                const size = parseInt(response.headers['content-length'] ?? '0', 10) || 0;
+                this.cache.assetFileSizeCache.set(asset.id, size, 'preview');
+                return size;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
 
         if (config.enableLocalFiles)
         {
             const filepath = "/immich" + asset.originalPath;
             const stats = fs.statSync(filepath)
             const size = stats.size
-            this.cache.assetFileSizes.set(asset.id, size);
+            this.cache.assetFileSizeCache.set(asset.id, size, 'original');
             return size;
         }
 
@@ -881,7 +880,7 @@ export class ImmichAPI
         });
 
         const size = Number(response?.totalSize ?? 0);
-        this.cache.assetFileSizes.set(asset.id, size);
+        this.cache.assetFileSizeCache.set(asset.id, size, 'original');
         return size;
     }
     async SERVER_RenameAlbum(album: ImmichAlbumDirectoryInfo, newAlbumName: string)
