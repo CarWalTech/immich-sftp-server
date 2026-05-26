@@ -34,17 +34,6 @@ export class ImmichVirtualAssetSidecar extends VirtualFile
     }
     private async get_xmp()
     {
-        // Fast path: skip rebuild if the asset hasn't changed since last generation.
-        // getAssetUpdatedAt checks assetInfoCache first, then bulk-fetch hints —
-        // so this avoids a network round-trip whenever a directory listing already
-        // seeded the updatedAt for this asset.
-        if (this.metadata_contents && this._lastBuiltUpdatedAt)
-        {
-            const knownUpdatedAt = this.file_system.getApi().cache.getAssetUpdatedAt(this.asset.id);
-            if (knownUpdatedAt === this._lastBuiltUpdatedAt)
-                return this.metadata_contents;
-        }
-
         const actual_asset = await this.file_system.getApi().FETCH_Asset(this.asset.id)
         try
         {

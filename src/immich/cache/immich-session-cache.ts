@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { ImmichVirtualAssetFile } from "../collections/immich-virtual-asset-file";
 import { ImmichAlbumDirectoryInfo, ImmichAlbumsDirectoryNode, ImmichUser } from "../utils/immich-api-utils";
 import { ImmichAsset } from "../utils/immich-api-utils";
@@ -5,6 +7,10 @@ import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
 import { DateUtils } from "../../utils/date-utils";
 import { logger } from "../../logger";
 import { ImmichVirtualAssetItem } from "../collections/immich-virtual-directory";
+import { AssetDownloadSource } from '../../config';
+
+const ASSET_CACHE_DIR = '/config/cache';
+const SAVE_DEBOUNCE_MS = 5_000;
 
 export interface ImmichCachedEntry<T>
 {
@@ -38,42 +44,76 @@ export interface ImmichTreeCacheFetchArgs
     fetchData: () => Promise<ImmichAlbumsDirectoryNode | undefined>;
 }
 
+export class ImmichAssetFileSizeCache
+{
+    original: Map<string, number>
+    preview: Map<string, number>
+
+    constructor()
+    {
+        this.original = new Map()
+        this.preview = new Map()
+    }
+
+    get(id: string, mode: AssetDownloadSource)
+    {
+        return mode == 'preview' ? this.preview.get(id) : this.original.get(id)
+    }
+
+    set(id: string, value: number, mode: AssetDownloadSource)
+    {
+        mode == 'preview' ? this.preview.set(id, value) : this.original.set(id, value)
+    }
+
+    delete(id: string)
+    {
+        this.original.delete(id);
+        this.preview.delete(id);
+    }
+
+    clear()
+    {
+
+        this.original.clear();
+        this.preview.clear();
+    }
+}
+
 export class ImmichSessionCache
 {
-    albumsMap: Map<string, string>
-    assetFileSizes: Map<string, number>;
-    assetPreviewSizes: Map<string, number>;
+    // Stores raw asset byte data
     assetFileBuffers: Map<string, VirtualContentBuffer>;
-
+    // Store asset file sizes
+    assetFileSizeCache: ImmichAssetFileSizeCache;
     // Stores raw asset data — no connection-specific references.
     assetInfoCache: Map<string, ImmichCachedEntry<ImmichAsset>>;
-    assetListCache: Map<string, ImmichCachedEntry<ImmichAsset[]>>;
+    // Stores ordered asset ID lists per directory/album key; full data resolved via assetInfoCache.
+    assetListCache: Map<string, ImmichCachedEntry<string[]>>;
+    // Stores the album directory path by raw album id key;
+    albumsPathCache: Map<string, string>
+    // Stores album tree data per directory/path key
     albumsTreeCache: Map<string, ImmichCachedEntry<ImmichAlbumsDirectoryNode | undefined>>;
 
     // Deduplication maps: when multiple connections request the same directory
     // simultaneously (e.g. Dolphin thumbnail workers), they all share one in-flight
     // fetch rather than each issuing their own redundant API calls.
     private inFlightAssetFetches: Map<string, Promise<ImmichAsset>> = new Map();
-    private inFlightAssetListFetches: Map<string, Promise<ImmichAsset[]>> = new Map();
+    private inFlightAssetListFetches: Map<string, Promise<string[]>> = new Map();
     private inFlightAlbumTreeFetches: Map<string, Promise<ImmichAlbumsDirectoryNode | undefined>> = new Map();
 
-    // Lightweight updatedAt hints seeded from bulk asset list fetches.
-    // Used by sidecar nodes to skip FETCH_Asset when the asset hasn't changed.
-    // Never stores full asset data — only updatedAt strings — so it cannot
-    // corrupt the full-asset assetInfoCache entries.
-    private assetUpdatedAtHints: Map<string, string> = new Map();
-
     private static _instances: Map<string, ImmichSessionCache> = new Map();
+
+    private _userId: string | null = null;
+    private _saveTimer: ReturnType<typeof setTimeout> | null = null;
 
     constructor()
     {
         this.assetListCache = new Map()
         this.assetInfoCache = new Map()
-        this.assetFileSizes = new Map()
-        this.assetPreviewSizes = new Map()
+        this.assetFileSizeCache = new ImmichAssetFileSizeCache()
         this.assetFileBuffers = new Map()
 
-        this.albumsMap = new Map()
+        this.albumsPathCache = new Map()
         this.albumsTreeCache = new Map()
     }
 
@@ -85,9 +125,65 @@ export class ImmichSessionCache
         if (!instance)
         {
             instance = new ImmichSessionCache();
+            instance._userId = user.id;
+            instance.load();
             this._instances.set(user.id, instance);
         }
         return instance;
+    }
+
+    private filepath(): string
+    {
+        return path.join(ASSET_CACHE_DIR, `${this._userId}-assets.json`);
+    }
+    private load(): void
+    {
+        const filePath = this.filepath();
+        try
+        {
+            if (!fs.existsSync(filePath)) return;
+            const raw = fs.readFileSync(filePath, 'utf8');
+            const parsed = JSON.parse(raw) as Record<string, ImmichCachedEntry<ImmichAsset>>;
+            let count = 0;
+            for (const [k, v] of Object.entries(parsed))
+            {
+                if (k && v?.data && v?.updatedAt)
+                {
+                    this.assetInfoCache.set(k, v);
+                    count++;
+                }
+            }
+            logger.info('ImmichSessionCache', 'LOAD', `Restored ${count} asset entries from disk`);
+        }
+        catch (err)
+        {
+            logger.warn('ImmichSessionCache', 'LOAD', `Failed to restore asset cache from disk: ${err}`);
+        }
+    }
+    private save(): void
+    {
+        if (!this._userId) return;
+        const filePath = this.filepath();
+        try
+        {
+            fs.mkdirSync(ASSET_CACHE_DIR, { recursive: true });
+            const data: Record<string, ImmichCachedEntry<ImmichAsset>> = Object.fromEntries(this.assetInfoCache);
+            fs.writeFileSync(filePath, JSON.stringify(data), 'utf8');
+        }
+        catch (err)
+        {
+            logger.warn('ImmichSessionCache', 'SAVE', `Failed to persist asset cache to disk: ${err}`);
+        }
+    }
+    private scheduleSave(): void
+    {
+        if (!this._userId) return;
+        if (this._saveTimer !== null) clearTimeout(this._saveTimer);
+        this._saveTimer = setTimeout(() =>
+        {
+            this._saveTimer = null;
+            this.save();
+        }, SAVE_DEBOUNCE_MS);
     }
 
     public async fetchCachedAsset(assetId: string, { fetchMeta, fetchData }: { fetchMeta?: () => Promise<{ updatedAt?: string }>; fetchData: () => Promise<ImmichAsset> }): Promise<ImmichAsset>
@@ -112,11 +208,13 @@ export class ImmichSessionCache
                 const data = await fetchData();
                 const updatedAt = freshMeta?.updatedAt ?? data.updatedAt ?? DateUtils.getTimeStringNowISO();
                 this.assetInfoCache.set(assetId, { data, updatedAt });
+                this.scheduleSave();
                 return data;
             }
 
             const data = await fetchData();
             this.assetInfoCache.set(assetId, { data, updatedAt: data.updatedAt ?? DateUtils.getTimeStringNowISO() });
+            this.scheduleSave();
             return data;
         })();
 
@@ -126,18 +224,29 @@ export class ImmichSessionCache
     }
     public async fetchedCachedAssetLists(cacheKey: string, { fetchMeta, fetchData, buildFiles }: ImmichAssetCacheFetchArgs): Promise<ImmichVirtualAssetItem[]>
     {
-        // Deduplicate concurrent fetches so all connections share one in-flight
-        // API request. The promise resolves to raw ImmichAsset[] (no connection
-        // references), then each caller runs buildFiles() independently.
-        let assetPromise = this.inFlightAssetListFetches.get(cacheKey);
-
-        if (!assetPromise)
+        const _storeAssetsAndGetIds = (assets: ImmichAsset[], listUpdatedAt: string): string[] =>
         {
-            assetPromise = (async () =>
+            const ids: string[] = [];
+            for (const asset of assets)
+            {
+                this.assetInfoCache.set(asset.id, { data: asset, updatedAt: asset.updatedAt ?? listUpdatedAt });
+                ids.push(asset.id);
+            }
+            this.scheduleSave();
+            return ids;
+        };
+
+        // Deduplicate concurrent fetches. The promise resolves to asset IDs (stored in
+        // assetListCache); full asset data is kept in assetInfoCache to avoid duplication.
+        let idPromise = this.inFlightAssetListFetches.get(cacheKey);
+
+        if (!idPromise)
+        {
+            idPromise = (async (): Promise<string[]> =>
             {
                 const cached = this.assetListCache.get(cacheKey);
 
-                // No validator: trust the cached data until an explicit invalidation.
+                // No validator: trust the cached ID list until an explicit invalidation.
                 if (cached && !fetchMeta) return cached.data;
 
                 if (fetchMeta)
@@ -150,27 +259,29 @@ export class ImmichSessionCache
                     if (cached && freshMeta?.updatedAt && freshMeta.updatedAt === cached.updatedAt)
                         return cached.data;
 
-                    // Cache stale or missing — fetch and store with the API timestamp.
-                    const data = await fetchData();
+                    // Cache stale or missing — fetch, populate assetInfoCache, store IDs.
+                    const assets = await fetchData();
                     const updatedAt = freshMeta?.updatedAt ?? DateUtils.getTimeStringNowISO();
-                    this.assetListCache.set(cacheKey, { data, updatedAt });
-                    data.forEach(a => { if (a.updatedAt) this.assetUpdatedAtHints.set(a.id, a.updatedAt); });
-                    return data;
+                    const ids = _storeAssetsAndGetIds(assets, updatedAt);
+                    this.assetListCache.set(cacheKey, { data: ids, updatedAt });
+                    return ids;
                 }
 
                 // No cached entry and no validator.
-                const data = await fetchData();
-                this.assetListCache.set(cacheKey, { data, updatedAt: DateUtils.getTimeStringNowISO() });
-                data.forEach(a => { if (a.updatedAt) this.assetUpdatedAtHints.set(a.id, a.updatedAt); });
-                return data;
+                const assets = await fetchData();
+                const updatedAt = DateUtils.getTimeStringNowISO();
+                const ids = _storeAssetsAndGetIds(assets, updatedAt);
+                this.assetListCache.set(cacheKey, { data: ids, updatedAt });
+                return ids;
             })();
 
-            this.inFlightAssetListFetches.set(cacheKey, assetPromise);
-            assetPromise.finally(() => this.inFlightAssetListFetches.delete(cacheKey)).catch(() => { });
+            this.inFlightAssetListFetches.set(cacheKey, idPromise);
+            idPromise.finally(() => this.inFlightAssetListFetches.delete(cacheKey)).catch(() => { });
         }
 
-        // Build fresh file nodes for this connection from the shared raw assets.
-        const assets = await assetPromise;
+        // Resolve IDs → assets from assetInfoCache, then build per-connection file nodes.
+        const ids = await idPromise;
+        const assets = ids.map(id => this.assetInfoCache.get(id)?.data).filter((a): a is ImmichAsset => a !== undefined);
         return buildFiles(assets);
     }
     public async fetchCachedAlbumTree(cacheKey: string, { fetchMeta, fetchData }: ImmichTreeCacheFetchArgs): Promise<ImmichAlbumsDirectoryNode | undefined>
@@ -200,7 +311,7 @@ export class ImmichSessionCache
                 this.albumsTreeCache.set(cacheKey, { data, updatedAt });
 
                 const album = data?.album ?? undefined;
-                if (album) this.albumsMap.set(album.id, cacheKey);
+                if (album) this.albumsPathCache.set(album.id, cacheKey);
 
                 return data;
             }
@@ -210,7 +321,7 @@ export class ImmichSessionCache
             this.albumsTreeCache.set(cacheKey, { data, updatedAt: DateUtils.getTimeStringNowISO() });
 
             const album = data?.album ?? undefined;
-            if (album) this.albumsMap.set(album.id, cacheKey);
+            if (album) this.albumsPathCache.set(album.id, cacheKey);
 
             return data;
         })();
@@ -219,38 +330,29 @@ export class ImmichSessionCache
         promise.finally(() => this.inFlightAlbumTreeFetches.delete(cacheKey)).catch(() => { });
         return promise;
     }
-    public seedAssetUpdatedAt(assetId: string, updatedAt: string): void
-    {
-        this.assetUpdatedAtHints.set(assetId, updatedAt);
-    }
-    public getAssetUpdatedAt(assetId: string): string | undefined
-    {
-        return this.assetInfoCache.get(assetId)?.updatedAt ?? this.assetUpdatedAtHints.get(assetId);
-    }
 
     public invalidateAssets(assetIds: string[])
     {
         for (const id of assetIds)
         {
             this.assetInfoCache.delete(id);
-            this.assetUpdatedAtHints.delete(id);
-            this.assetFileSizes.delete(id);
-            this.assetPreviewSizes.delete(id);
+            this.assetFileSizeCache.delete(id);
             const buf = this.assetFileBuffers.get(id);
             if (buf?.isTmp) buf.removeCallback();
             this.assetFileBuffers.delete(id);
         }
+        this.scheduleSave();
     }
     public invalidateAlbums()
     {
-        this.albumsMap.clear()
+        this.albumsPathCache.clear()
         this.albumsTreeCache.clear()
     }
     public invalidateAlbumContents(albumIds: string[])
     {
         for (const id of albumIds)
         {
-            const path = this.albumsMap.get(id)
+            const path = this.albumsPathCache.get(id)
             if (path)
             {
                 this.albumsTreeCache.delete(path)
@@ -273,12 +375,11 @@ export class ImmichSessionCache
             if (buf.isTmp) buf.removeCallback();
 
         this.assetListCache.clear();
-        this.assetInfoCache.clear();
-        this.assetUpdatedAtHints.clear();
+        // assetInfoCache and assetUpdatedAtHints are intentionally preserved:
+        // per-asset metadata survives full invalidations and persists across restarts.
         this.assetFileBuffers.clear();
-        this.assetFileSizes.clear();
-        this.assetPreviewSizes.clear();
-        this.albumsMap.clear()
+        this.assetFileSizeCache.clear();
+        this.albumsPathCache.clear()
         this.albumsTreeCache.clear()
     }
 
