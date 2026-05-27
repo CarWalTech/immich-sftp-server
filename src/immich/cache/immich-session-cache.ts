@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { ImmichAlbumsDirectoryNode, ImmichUser } from "../utils/immich-api-utils";
+import { ImmichAlbumDirectoryInfo, ImmichAlbumsDirectoryNode, ImmichUser } from "../utils/immich-api-utils";
 import { ImmichAsset } from "../utils/immich-api-utils";
 import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
 import { DateUtils } from "../../utils/date-utils";
@@ -12,12 +12,20 @@ import { buildAssetMetadataXMP } from '../utils/immich-metadata-utils';
 
 const ASSET_CACHE_DIR = '/config/cache';
 const SAVE_DEBOUNCE_MS = 5_000;
+// How long a cache entry is trusted without re-validating against the Immich API.
+// Within this window all callers return cached data with zero network I/O.
+// After the window expires ONE request re-validates (others wait on the in-flight
+// dedup map); subsequent callers within the new window skip validation again.
+const VALIDATION_TTL_MS = 30_000;
 
 export interface ImmichCachedEntry<T>
 {
     data: T;
     updatedAt: string;
     checksum?: string;
+    // Epoch-ms timestamp of the last successful validation against the Immich API.
+    // undefined = never validated this session (always validate on first access).
+    lastValidatedAt?: number;
 }
 
 export interface ImmichCacheInvalidationOptions
@@ -96,6 +104,15 @@ export class ImmichSessionCache
     albumsTreeCache: Map<string, ImmichCachedEntry<ImmichAlbumsDirectoryNode | undefined>>;
     // Stores rendered XMP sidecar strings keyed by asset ID, valid while updatedAt matches.
     private xmpCache: Map<string, { xmp: string; updatedAt: string }> = new Map();
+
+    // Raw album list cache — the result of GET /api/albums, shared across all
+    // connections for the same user.  All FETCH_AlbumVirtualBranch calls derive
+    // their tree/branch from this list; caching it here means the full album list
+    // is fetched at most once per VALIDATION_TTL_MS, regardless of how many
+    // individual album folders are opened.
+    private albumsRawListCache: ImmichAlbumDirectoryInfo[] | null = null;
+    private albumsRawListCachedAt = 0;
+    private inFlightAlbumsListFetch: Promise<ImmichAlbumDirectoryInfo[]> | null = null;
 
     // Deduplication maps: when multiple connections request the same directory
     // simultaneously (e.g. Dolphin thumbnail workers), they all share one in-flight
@@ -193,6 +210,37 @@ export class ImmichSessionCache
         }, SAVE_DEBOUNCE_MS);
     }
 
+    /**
+     * Cache + deduplicate GET /api/albums calls.
+     *
+     * Every FETCH_AlbumVirtualBranch call needs the full album list to find its
+     * branch.  Without this cache, navigating to N album folders triggers N ×
+     * GET /api/albums.  With this cache the list is fetched at most once per
+     * VALIDATION_TTL_MS, shared across all connections for the same user.
+     */
+    public async fetchCachedAlbumsList(fetchData: () => Promise<ImmichAlbumDirectoryInfo[]>): Promise<ImmichAlbumDirectoryInfo[]>
+    {
+        // TTL fast-path — serve from RAM if the list is still fresh.
+        if (this.albumsRawListCache !== null &&
+            (Date.now() - this.albumsRawListCachedAt) < VALIDATION_TTL_MS)
+            return this.albumsRawListCache;
+
+        // In-flight dedup — when multiple connections call FETCH_Albums concurrently,
+        // share a single HTTP request rather than issuing one per connection.
+        if (!this.inFlightAlbumsListFetch)
+        {
+            this.inFlightAlbumsListFetch = fetchData()
+                .then(data =>
+                {
+                    this.albumsRawListCache = data;
+                    this.albumsRawListCachedAt = Date.now();
+                    return data;
+                })
+                .finally(() => { this.inFlightAlbumsListFetch = null; });
+        }
+        return this.inFlightAlbumsListFetch;
+    }
+
     public async fetchCachedAsset(assetId: string, { fetchMeta, fetchData }: { fetchMeta?: () => Promise<{ updatedAt?: string }>; fetchData: () => Promise<ImmichAsset> }): Promise<ImmichAsset>
     {
         const inflight = this.inFlightAssetFetches.get(assetId);
@@ -243,6 +291,29 @@ export class ImmichSessionCache
             return ids;
         };
 
+        // ── Validation TTL fast-path ────────────────────────────────────────────
+        // fetchMeta always issues an API call (e.g. GET /api/albums/{id}) to check
+        // whether the cache is stale.  With rclone or Dolphin, the same directory
+        // is opened by 5–10 connections in quick succession; each one would fire its
+        // own API request and receive a cache-hit response it already had.
+        //
+        // Once any request has confirmed the data is fresh we stamp lastValidatedAt.
+        // All subsequent requests within VALIDATION_TTL_MS skip fetchMeta entirely
+        // and return from RAM.  Only the first request after the TTL expires
+        // re-validates (concurrent ones dedup via inFlightAssetListFetches).
+        if (fetchMeta)
+        {
+            const ttlCached = this.assetListCache.get(cacheKey);
+            if (ttlCached?.lastValidatedAt !== undefined &&
+                (Date.now() - ttlCached.lastValidatedAt) < VALIDATION_TTL_MS)
+            {
+                const assets = ttlCached.data
+                    .map(id => this.assetInfoCache.get(id)?.data)
+                    .filter((a): a is ImmichAsset => a !== undefined);
+                return buildFiles(assets);
+            }
+        }
+
         // Deduplicate concurrent fetches. The promise resolves to asset IDs (stored in
         // assetListCache); full asset data is kept in assetInfoCache to avoid duplication.
         let idPromise = this.inFlightAssetListFetches.get(cacheKey);
@@ -261,16 +332,20 @@ export class ImmichSessionCache
                     let freshMeta: { updatedAt?: string; checksum?: string } | undefined;
                     try { freshMeta = await fetchMeta(); } catch (_) { }
 
-                    // Cache hit: API timestamp matches what we stored.
+                    // Cache hit: timestamps match — stamp the TTL so the next
+                    // VALIDATION_TTL_MS of requests skip this round-trip.
                     logger.explicit("ImmichSessionCache", "ASSETS", `Cache Check Meta: new=${freshMeta?.updatedAt} old=${cached?.updatedAt}`)
                     if (cached && freshMeta?.updatedAt && freshMeta.updatedAt === cached.updatedAt)
+                    {
+                        cached.lastValidatedAt = Date.now();
                         return cached.data;
+                    }
 
                     // Cache stale or missing — fetch, populate assetInfoCache, store IDs.
                     const assets = await fetchData();
                     const updatedAt = freshMeta?.updatedAt ?? DateUtils.getTimeStringNowISO();
                     const ids = _storeAssetsAndGetIds(assets, updatedAt);
-                    this.assetListCache.set(cacheKey, { data: ids, updatedAt });
+                    this.assetListCache.set(cacheKey, { data: ids, updatedAt, lastValidatedAt: Date.now() });
                     return ids;
                 }
 
@@ -293,6 +368,18 @@ export class ImmichSessionCache
     }
     public async fetchCachedAlbumTree(cacheKey: string, { fetchMeta, fetchData }: ImmichTreeCacheFetchArgs): Promise<ImmichAlbumsDirectoryNode | undefined>
     {
+        // ── Validation TTL fast-path (same logic as fetchCachedAssetLists) ──────
+        // FETCH_AlbumVirtualTree / FETCH_AlbumVirtualBranch both supply fetchMeta,
+        // which calls GET /api/albums to detect stale data.  Without a TTL every
+        // directory navigation to an album folder re-fetches the full album list.
+        if (fetchMeta)
+        {
+            const ttlCached = this.albumsTreeCache.get(cacheKey);
+            if (ttlCached?.lastValidatedAt !== undefined &&
+                (Date.now() - ttlCached.lastValidatedAt) < VALIDATION_TTL_MS)
+                return ttlCached.data;
+        }
+
         const inflight = this.inFlightAlbumTreeFetches.get(cacheKey);
         if (inflight) return inflight;
 
@@ -308,14 +395,17 @@ export class ImmichSessionCache
                 let freshMeta: { updatedAt?: string; checksum?: string } | undefined;
                 try { freshMeta = await fetchMeta(); } catch (_) { }
 
-                // Cache hit: API timestamp matches what we stored.
+                // Cache hit: stamp the TTL so subsequent navigations skip this call.
                 if (cached && freshMeta?.updatedAt && freshMeta.updatedAt === cached.updatedAt)
+                {
+                    cached.lastValidatedAt = Date.now();
                     return cached.data;
+                }
 
                 // Cache stale or missing — fetch data and store with the API timestamp.
                 const data = await fetchData();
                 const updatedAt = freshMeta?.updatedAt ?? DateUtils.getTimeStringNowISO();
-                this.albumsTreeCache.set(cacheKey, { data, updatedAt });
+                this.albumsTreeCache.set(cacheKey, { data, updatedAt, lastValidatedAt: Date.now() });
 
                 const album = data?.album ?? undefined;
                 if (album) this.albumsPathCache.set(album.id, cacheKey);
@@ -388,6 +478,9 @@ export class ImmichSessionCache
     }
     public invalidateAlbums()
     {
+        // Also flush the raw album list so the next FETCH_Albums call re-fetches.
+        this.albumsRawListCache = null;
+        this.albumsRawListCachedAt = 0;
         this.albumsPathCache.clear()
         this.albumsTreeCache.clear()
     }
@@ -422,6 +515,8 @@ export class ImmichSessionCache
         // per-asset metadata survives full invalidations and persists across restarts.
         this.assetFileBuffers.clear();
         this.assetFileSizeCache.clear();
+        this.albumsRawListCache = null;
+        this.albumsRawListCachedAt = 0;
         this.albumsPathCache.clear()
         this.albumsTreeCache.clear()
     }

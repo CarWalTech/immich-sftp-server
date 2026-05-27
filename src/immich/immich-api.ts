@@ -439,27 +439,34 @@ export class ImmichAPI
     }
     public async FETCH_Albums(): Promise<ImmichAlbumDirectoryInfo[]>
     {
-        const [ownAlbumsResponse] = await Promise.all([
-            this.callApi({
-                method: 'GET',
-                endpoint: 'albums',
-                logAction: 'All own albums',
-                skipResponseLog: true,
-            })
-        ]);
-
-        const ownAlbums = Array.isArray(ownAlbumsResponse) ? ownAlbumsResponse : [];
-        const combinedByAlbumId = new Map<string, Record<string, unknown>>();
-
-        for (const album of [...ownAlbums])
+        // Delegate to the session cache so the result is shared across all connections
+        // for the same user and re-fetched at most once per VALIDATION_TTL_MS.
+        // Without this, every FETCH_AlbumVirtualBranch call (one per album folder
+        // navigation) would issue its own GET /api/albums.
+        return this.cache.fetchCachedAlbumsList(async () =>
         {
-            if (isObjectWithId(album))
-            {
-                combinedByAlbumId.set(String(album.id), album);
-            }
-        }
+            const [ownAlbumsResponse] = await Promise.all([
+                this.callApi({
+                    method: 'GET',
+                    endpoint: 'albums',
+                    logAction: 'All own albums',
+                    skipResponseLog: true,
+                })
+            ]);
 
-        return this.filterAlbums(Array.from(combinedByAlbumId.values()));
+            const ownAlbums = Array.isArray(ownAlbumsResponse) ? ownAlbumsResponse : [];
+            const combinedByAlbumId = new Map<string, Record<string, unknown>>();
+
+            for (const album of [...ownAlbums])
+            {
+                if (isObjectWithId(album))
+                {
+                    combinedByAlbumId.set(String(album.id), album);
+                }
+            }
+
+            return this.filterAlbums(Array.from(combinedByAlbumId.values()));
+        });
     }
     public async FETCH_AlbumsForAssetId(assetId: string): Promise<ImmichAlbumDirectoryInfo[]>
     {
