@@ -14,12 +14,10 @@ export async function deleteAssetFromContainer(item: ImmichVirtualAssetFile, api
     {
         if (container instanceof ImmichAlbumFolder)
         {
-            const album = container as ImmichAlbumFolder
             const info = (container as ImmichAlbumFolder).get_album_data().album ?? undefined
             if (info !== undefined)
             {
                 await api.SERVER_DeleteAssetFromAlbum(info, item.asset_data);
-                album.file_system.getCache().invalidateAlbumContents([info.id]);
                 return true;
             }
             else return false

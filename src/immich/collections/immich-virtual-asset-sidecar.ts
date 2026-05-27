@@ -21,8 +21,6 @@ export class ImmichVirtualAssetSidecar extends VirtualFile
     private asset: ImmichAsset
     private file_system: ImmichFileSystem
     private parent_directory: VirtualDirectory
-    private metadata_contents: string | null = null
-    private _lastBuiltUpdatedAt: string | undefined
 
     constructor(asset: ImmichAsset, fsName: string, parent: VirtualDirectory, file_system: ImmichFileSystem)
     {
@@ -31,29 +29,6 @@ export class ImmichVirtualAssetSidecar extends VirtualFile
         this.file_system = file_system
         this.asset = asset
 
-    }
-    private async get_xmp()
-    {
-        const actual_asset = await this.file_system.getApi().FETCH_Asset(this.asset.id)
-        try
-        {
-            if (config.enableLocalFiles)
-            {
-                const filepath = "/immich" + actual_asset.originalPath + ".xmp";
-                const xmp_data = await fs.promises.readFile(filepath, 'utf8');
-                this.metadata_contents = buildAssetMetadataXMP(actual_asset, xmp_data);
-            }
-            else
-            {
-                this.metadata_contents = buildAssetMetadataXMP(actual_asset, null);
-            }
-        }
-        catch
-        {
-            this.metadata_contents = buildAssetMetadataXMP(actual_asset, null);
-        }
-        this._lastBuiltUpdatedAt = actual_asset.updatedAt;
-        return this.metadata_contents ?? ""
     }
     async event_setattr(attr: VirtualMetadata): Promise<boolean>
     {
@@ -67,12 +42,12 @@ export class ImmichVirtualAssetSidecar extends VirtualFile
     }
     async event_stat(): Promise<VirtualMetadata>
     {
-        const meta = await this.get_xmp()
+        const meta = await this.file_system.getApi().FETCH_AssetXMP(this.asset.id)
         return VirtualMetadata.file_rw(this.name, Buffer.byteLength(meta, 'utf8'), getAssetMtime(this.asset));
     }
     async event_readfile(): Promise<VirtualContentBuffer>
     {
-        const meta = await this.get_xmp()
+        const meta = await this.file_system.getApi().FETCH_AssetXMP(this.asset.id)
         return VirtualContentBufferUtils.bufferFromString(meta);
     }
     async event_writefile(contents: VirtualContentBuffer): Promise<boolean>

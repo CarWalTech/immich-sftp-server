@@ -183,7 +183,8 @@ export class ImmichAPI
     // #endregion
 
     // #region Get Methods
-    get cache(): ImmichSessionCache
+
+    private get cache(): ImmichSessionCache
     {
         return ImmichSessionCache.Instance(this.currentUser)
     }
@@ -227,7 +228,7 @@ export class ImmichAPI
     // #endregion
 
     // #region Api Function
-    public async callApi({ method, endpoint, data, logAction, respAsStream = false, skipResponseLog = false }: { method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', endpoint: string, data?: any, logAction: string, respAsStream?: boolean, skipResponseLog?: boolean }): Promise<any>
+    private async callApi({ method, endpoint, data, logAction, respAsStream = false, skipResponseLog = false }: { method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', endpoint: string, data?: any, logAction: string, respAsStream?: boolean, skipResponseLog?: boolean }): Promise<any>
     {
         const isDownload = method === 'GET' && endpoint.startsWith('assets/') && (endpoint.endsWith('/original') || endpoint.endsWith('/thumbnail'));
 
@@ -470,7 +471,7 @@ export class ImmichAPI
     {
         const cacheKey = parent.fullpath;
 
-        return await this.cache.fetchedCachedAssetLists(cacheKey, {
+        return await this.cache.fetchCachedAssetLists(cacheKey, {
             fetchData: async () =>
             {
                 return await this.FETCH_AssetsByMetadata({ isNotInAlbum: true }, { isNotInAlbum: true, visibility: "archive" })
@@ -486,7 +487,7 @@ export class ImmichAPI
     {
         const cacheKey = parent.fullpath;
 
-        return await this.cache.fetchedCachedAssetLists(cacheKey, {
+        return await this.cache.fetchCachedAssetLists(cacheKey, {
             fetchData: async () =>
             {
                 const earliestTime = DateUtils.getEarliestTimeStringISO();
@@ -512,7 +513,7 @@ export class ImmichAPI
             return fetchedAlbumData;
         };
 
-        return await this.cache.fetchedCachedAssetLists(cacheKey, {
+        return await this.cache.fetchCachedAssetLists(cacheKey, {
             fetchMeta: async () => { const meta = await getAlbumData(); return { updatedAt: meta?.updatedAt }; },
             fetchData: async () =>
             {
@@ -526,7 +527,7 @@ export class ImmichAPI
     public async FETCH_AssetsForTag(tag: ImmichTagDirectoryInfo, parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetItem[]>
     {
         const cacheKey = parent.fullpath;
-        return await this.cache.fetchedCachedAssetLists(cacheKey, {
+        return await this.cache.fetchCachedAssetLists(cacheKey, {
             // Validate using tag metadata
             fetchMeta: async () =>
             {
@@ -571,12 +572,26 @@ export class ImmichAPI
                 });
 
                 const items = Array.isArray(response?.assets?.items) ? response.assets.items : [];
+
+                // Cache-hit fast path: if assetInfoCache already has fresh data for this
+                // asset (updatedAt matches), skip the individual GET assets/{id} call entirely.
+                // Fields missing from search/metadata (e.g. exifInfo.fileSizeInByte) are
+                // already present in the cached full-asset entry.
+                const fetchNeeded: string[] = [];
                 for (const item of items)
                 {
-                    const actual_item = await this.FETCH_Asset(item.id)
-                    const asset = mapAssetFromApi(actual_item);
-                    byAssetId.set(asset.id, asset);
+                    if (!item?.id || typeof item.id !== 'string') continue;
+                    const cached = this.cache.assetInfoCache.get(item.id);
+                    if (cached && item.updatedAt && cached.updatedAt === item.updatedAt)
+                        byAssetId.set(item.id, cached.data);
+                    else
+                        fetchNeeded.push(item.id);
                 }
+
+                // Fetch misses in parallel — FETCH_Asset handles per-id in-flight dedup.
+                const fetched = await Promise.all(fetchNeeded.map(id => this.FETCH_Asset(id)));
+                for (const asset of fetched)
+                    byAssetId.set(asset.id, asset);
 
                 const nextPageRaw = response?.assets?.nextPage;
                 const nextPage = typeof nextPageRaw === 'string' ? Number.parseInt(nextPageRaw, 10) : Number.NaN;
@@ -588,6 +603,10 @@ export class ImmichAPI
             }
         }
         return Array.from(byAssetId.values());
+    }
+    public async FETCH_AssetXMP(assetId: string)
+    {
+        return await this.cache.fetchCachedAssetXMP(assetId, this)
     }
     public async FETCH_Tags(): Promise<ImmichTag[]>
     {
@@ -784,6 +803,7 @@ export class ImmichAPI
             await this.SERVER_DeleteAsset(asset)
         }
 
+        this.cache.invalidateAlbumContents([album.id])
     }
     async SERVER_DeleteAssetFromAlbumOnly(album: ImmichAlbumDirectoryInfo, assetId: string)
     {
@@ -893,6 +913,24 @@ export class ImmichAPI
         });
 
         this.cache.invalidateAlbums()
+    }
+    async SERVER_UpdateAlbum(album: ImmichAlbumDirectoryInfo, data: any, logAction: string = "Update album description/settings")
+    {
+        await this.callApi({
+            method: 'PATCH',
+            endpoint: `albums/${album.id}`,
+            data: JSON.stringify(data),
+            logAction: logAction,
+        });
+    }
+    async SERVER_UpdateAlbumSharing(album: ImmichAlbumDirectoryInfo, data: any)
+    {
+        return this.callApi({
+            method: 'PUT',
+            endpoint: `albums/${album.id}/users`,
+            data: JSON.stringify(data),
+            logAction: 'Update album sharing',
+        });
     }
     async SERVER_RenameTag(tag: ImmichTag, newDisplayName: string)
     {
@@ -1085,6 +1123,57 @@ export class ImmichAPI
         });
 
         this.cache.invalidateAssets([assetId]);
+    }
+    async SERVER_UpdateAsset(assetId: string, patch: Record<string, unknown>)
+    {
+        await this.callApi({
+            method: 'PATCH',
+            endpoint: `assets/${assetId}`,
+            data: JSON.stringify(patch),
+            logAction: 'Update asset metadata from XMP',
+        });
+        this.cache.invalidateAssets([assetId]);
+    }
+    async SERVER_RemoveAssetsFromTags(assetId: string, toRemove: string[])
+    {
+        await this.callApi({
+            method: 'DELETE',
+            endpoint: 'assets/tags',
+            data: JSON.stringify({ tagIds: toRemove, assetIds: [assetId] }),
+            logAction: 'Remove tags from asset via XMP sync',
+        });
+    }
+    async SERVER_AddAssetsToTags(assetId: string, toAdd: string[])
+    {
+        await this.callApi({
+            method: 'PUT',
+            endpoint: 'assets/tags',
+            data: JSON.stringify({ tagIds: toAdd, assetIds: [assetId] }),
+            logAction: 'Add tags to asset from XMP',
+        });
+    }
+    async SERVER_CreateTag(tagName: string)
+    {
+        return await this.callApi({
+            method: 'POST',
+            endpoint: 'tags',
+            data: JSON.stringify({ name: tagName }),
+            logAction: 'Create tag',
+        });
+    }
+
+    // #endregion
+
+    // #region Cache Functions
+
+    public CACHE_InvalidateTree()
+    {
+        this.cache.invalidateTree()
+    }
+
+    public CACHE_InvalidateFilepath(path: string)
+    {
+        this.cache.invalidateAssetList(path)
     }
 
     // #endregion

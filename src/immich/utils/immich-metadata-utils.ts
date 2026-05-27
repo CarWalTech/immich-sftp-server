@@ -90,7 +90,7 @@ export interface ImmichApplyMetadataFn
 // Classes
 export class AlbumMetadataDocumentUtils
 {
-    static async updateAlbumSharing(immichRequest: ImmichRequestFn, album: AlbumVirtualFileAlbum, sharedUsers: AlbumMetadataSharedUser[]): Promise<void>
+    static async updateAlbumSharing(api: ImmichAPI, album: AlbumVirtualFileAlbum, sharedUsers: AlbumMetadataSharedUser[]): Promise<void>
     {
         const existingUsers = album.albumUsers ?? [];
         const byUserId = new Map(existingUsers.map(user => [user.userId, user]));
@@ -113,12 +113,8 @@ export class AlbumMetadataDocumentUtils
             });
         }
 
-        await immichRequest({
-            method: 'PUT',
-            endpoint: `albums/${album.id}/users`,
-            data: JSON.stringify({ albumUsers: updatedSharedUsers }),
-            logAction: 'Update album sharing',
-        });
+        await api.SERVER_UpdateAlbumSharing(album, { albumUsers: updatedSharedUsers })
+
 
         album.albumUsers = updatedSharedUsers.map(user =>
         {
@@ -488,30 +484,20 @@ export async function saveAlbumMetadataFileContent({ album, content, currentUser
     const newAlbumName = metadata.album.name.trim();
     if (newAlbumName && newAlbumName !== album.albumName)
     {
-        await immichAPI.callApi({
-            method: 'PATCH',
-            endpoint: `albums/${album.id}`,
-            data: JSON.stringify({ albumName: newAlbumName }),
-            logAction: 'Rename album via album.yaml',
-        });
+        await immichAPI.SERVER_UpdateAlbum(album, { albumName: newAlbumName }, 'Rename album via album.yaml');
         album.albumName = newAlbumName;
     }
 
     const newDescription = AlbumMetadataDocumentUtils.mergeNoSyncTag(metadata.album.description, metadata.settings.hidden);
     if ((album.description ?? '') !== newDescription)
     {
-        await immichAPI.callApi({
-            method: 'PATCH',
-            endpoint: `albums/${album.id}`,
-            data: JSON.stringify({ description: newDescription }),
-            logAction: 'Update album description/settings',
-        });
+        await immichAPI.SERVER_UpdateAlbum(album, { description: newDescription }, 'Update album description/settings');
         album.description = newDescription;
     }
 
     if (!AlbumMetadataDocumentUtils.sameSharedUsers(current.sharing.sharedUsers, metadata.sharing.sharedUsers))
     {
-        await AlbumMetadataDocumentUtils.updateAlbumSharing(immichAPI.callApi, album, metadata.sharing.sharedUsers);
+        await AlbumMetadataDocumentUtils.updateAlbumSharing(immichAPI, album, metadata.sharing.sharedUsers);
     }
 }
 export async function saveAssetMetadataFileContent(asset: ImmichAsset, contents: string, api: ImmichAPI): Promise<void>
@@ -538,12 +524,7 @@ export async function saveAssetMetadataFileContent(asset: ImmichAsset, contents:
             }
             else
             {
-                const created = await api.callApi({
-                    method: 'POST',
-                    endpoint: 'tags',
-                    data: JSON.stringify({ name: value }),
-                    logAction: 'Create tag from XMP',
-                });
+                const created = await api.SERVER_CreateTag(value);
                 if (created?.id) targetTagIds.add(String(created.id));
             }
         }
@@ -552,20 +533,10 @@ export async function saveAssetMetadataFileContent(asset: ImmichAsset, contents:
         const toRemove = [...currentTagIds].filter(id => !targetTagIds.has(id));
 
         if (toAdd.length > 0)
-            await api.callApi({
-                method: 'PUT',
-                endpoint: 'assets/tags',
-                data: JSON.stringify({ tagIds: toAdd, assetIds: [asset.id] }),
-                logAction: 'Add tags to asset from XMP',
-            });
+            await api.SERVER_AddAssetsToTags(asset.id, toAdd)
 
         if (toRemove.length > 0)
-            await api.callApi({
-                method: 'DELETE',
-                endpoint: 'assets/tags',
-                data: JSON.stringify({ tagIds: toRemove, assetIds: [asset.id] }),
-                logAction: 'Remove tags from asset via XMP sync',
-            });
+            await api.SERVER_RemoveAssetsFromTags(asset.id, toRemove)
     }
 
     const desc = XMPUtils.getDescNode(XMPUtils.parseSidecar(contents));
@@ -624,13 +595,7 @@ export async function saveAssetMetadataFileContent(asset: ImmichAsset, contents:
 
     if (Object.keys(patch).length > 0)
     {
-        await api.callApi({
-            method: 'PATCH',
-            endpoint: `assets/${asset.id}`,
-            data: JSON.stringify(patch),
-            logAction: 'Update asset metadata from XMP',
-        });
-        api.cache.invalidateAssets([asset.id]);
+        await api.SERVER_UpdateAsset(asset.id, patch)
     }
 
     // --- Sync tags ---

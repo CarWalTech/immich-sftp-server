@@ -7,7 +7,9 @@ import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
 import { DateUtils } from "../../utils/date-utils";
 import { logger } from "../../logger";
 import { ImmichVirtualAssetItem } from "../collections/immich-virtual-directory";
-import { AssetDownloadSource } from '../../config';
+import { AssetDownloadSource, config } from '../../config';
+import { ImmichAPI } from '../immich-api';
+import { buildAssetMetadataXMP } from '../utils/immich-metadata-utils';
 
 const ASSET_CACHE_DIR = '/config/cache';
 const SAVE_DEBOUNCE_MS = 5_000;
@@ -93,6 +95,8 @@ export class ImmichSessionCache
     albumsPathCache: Map<string, string>
     // Stores album tree data per directory/path key
     albumsTreeCache: Map<string, ImmichCachedEntry<ImmichAlbumsDirectoryNode | undefined>>;
+    // Stores rendered XMP sidecar strings keyed by asset ID, valid while updatedAt matches.
+    private xmpCache: Map<string, { xmp: string; updatedAt: string }> = new Map();
 
     // Deduplication maps: when multiple connections request the same directory
     // simultaneously (e.g. Dolphin thumbnail workers), they all share one in-flight
@@ -222,7 +226,7 @@ export class ImmichSessionCache
         promise.finally(() => this.inFlightAssetFetches.delete(assetId)).catch(() => { });
         return promise;
     }
-    public async fetchedCachedAssetLists(cacheKey: string, { fetchMeta, fetchData, buildFiles }: ImmichAssetCacheFetchArgs): Promise<ImmichVirtualAssetItem[]>
+    public async fetchCachedAssetLists(cacheKey: string, { fetchMeta, fetchData, buildFiles }: ImmichAssetCacheFetchArgs): Promise<ImmichVirtualAssetItem[]>
     {
         const _storeAssetsAndGetIds = (assets: ImmichAsset[], listUpdatedAt: string): string[] =>
         {
@@ -330,6 +334,41 @@ export class ImmichSessionCache
         promise.finally(() => this.inFlightAlbumTreeFetches.delete(cacheKey)).catch(() => { });
         return promise;
     }
+    public async fetchCachedAssetXMP(assetId: string, api: ImmichAPI)
+    {
+        // Fast path: if assetInfoCache already has fresh data, skip FETCH_Asset entirely.
+        const cachedEntry = this.assetInfoCache.get(assetId);
+        const actual_asset = cachedEntry?.data ?? await api.FETCH_Asset(assetId);
+        const updatedAt = actual_asset.updatedAt ?? '';
+
+        // Return already-rendered XMP if the asset hasn't changed.
+
+        const entry = this.xmpCache.get(assetId);
+        const cached_xmp = entry?.updatedAt === updatedAt ? entry.xmp : undefined;
+        if (cached_xmp !== undefined) return cached_xmp;
+
+        let xmp: string;
+        try
+        {
+            if (config.enableLocalFiles)
+            {
+                const filepath = "/immich" + actual_asset.originalPath + ".xmp";
+                const xmp_data = await fs.promises.readFile(filepath, 'utf8');
+                xmp = buildAssetMetadataXMP(actual_asset, xmp_data);
+            }
+            else
+            {
+                xmp = buildAssetMetadataXMP(actual_asset, null);
+            }
+        }
+        catch
+        {
+            xmp = buildAssetMetadataXMP(actual_asset, null);
+        }
+
+        this.xmpCache.set(assetId, { xmp, updatedAt });
+        return xmp;
+    }
 
     public invalidateAssets(assetIds: string[])
     {
@@ -337,6 +376,7 @@ export class ImmichSessionCache
         {
             this.assetInfoCache.delete(id);
             this.assetFileSizeCache.delete(id);
+            this.xmpCache.delete(id);
             const buf = this.assetFileBuffers.get(id);
             if (buf?.isTmp) buf.removeCallback();
             this.assetFileBuffers.delete(id);
