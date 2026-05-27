@@ -6,6 +6,7 @@ import { ImmichVirtualAssetFile } from "../collections/immich-virtual-asset-file
 import { logger } from "../../logger";
 import { DateUtils } from "../../utils/date-utils";
 import { ImmichVirtualAssetSidecar } from "../collections/immich-virtual-asset-sidecar";
+import { config } from "../../config";
 
 export interface ImmichAlbumUser
 {
@@ -89,13 +90,17 @@ export interface ImmichAlbumDirectoryInfo extends ImmichAlbumBase
     assets?: ImmichAsset[];
     displayName?: string;
 }
-export interface ImmichAlbumsDirectoryNode
+export interface ImmichDirectoryNode
 {
     rawName: string; // original segment from albumName
     fsName: string; // normalized displayName segment
-    children: Map<string, ImmichAlbumsDirectoryNode>;
+    children: Map<string, ImmichDirectoryNode>;
+}
+export interface ImmichAlbumsDirectoryNode extends ImmichDirectoryNode
+{
     album?: ImmichAlbumDirectoryInfo;
-    path_id: string
+    path_id: string;
+    children: Map<string, ImmichAlbumsDirectoryNode>;
 }
 export interface ImmichTag
 {
@@ -107,12 +112,10 @@ export interface ImmichTag
     updatedAt?: string;
     createdAt?: string;
 }
-export interface ImmichTagsDirectoryNode
+export interface ImmichTagsDirectoryNode extends ImmichDirectoryNode
 {
-    rawName: string; // original segment from albumName
-    fsName: string; // normalized displayName segment
-    children: Map<string, ImmichTagsDirectoryNode>;
     tag?: ImmichTagDirectoryInfo;
+    children: Map<string, ImmichTagsDirectoryNode>;
 }
 export interface ImmichTagDirectoryInfo extends ImmichTag
 {
@@ -431,7 +434,7 @@ export function mapFilesFromAssets(assets: ImmichAsset[], parent: ImmichVirtualD
         return finalName;
     }
 
-    const enableSidecars = false;
+    const enableSidecars = config.assetSidecarsEnabled;
 
     const files = new Array<ImmichVirtualAssetItem>(enableSidecars ? assets.length * 2 : assets.length);
     const reservedNames = reserved_names ?? new Set<string>();

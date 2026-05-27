@@ -19,4 +19,23 @@ export class PathUtils
         const sanitized = candidate.replace(/[\\/:*?"<>|]/g, '_');
         return sanitized.trim() || fallbackName;
     }
+
+    public static normalizePath(path: string): string
+    {
+        if (!path) return "/";
+
+        // Replace backslashes, collapse duplicate slashes
+        path = path.replace(/\\/g, "/").replace(/\/+/g, "/");
+
+        // Ensure leading slash
+        if (!path.startsWith("/")) path = "/" + path;
+
+        // Remove trailing slash unless root
+        if (path.length > 1 && path.endsWith("/"))
+        {
+            path = path.slice(0, -1);
+        }
+
+        return path;
+    }
 }

@@ -86,6 +86,7 @@ export class Config
   maxCacheBufferSize: number
 
   // server asset / album settings
+  assetSidecarsEnabled: boolean
   assetFilePattern: AssetFileNamePattern
   assetDownloadSource: AssetDownloadSource
   albumFolderSeperator: string
@@ -119,6 +120,7 @@ export class Config
     this.maxCacheBufferSize = getEnvByteSize('SERVER_OPTION_MAX_CACHE_BUFFER', '4MB')
 
     // server asset / album settings
+    this.assetSidecarsEnabled = getEnvBoolean('SERVER_OPTION_ASSET_ENABLE_SIDECAR_FILES', true);
     this.assetFilePattern = parseAssetFileNamePattern(getOptionalEnv('SERVER_OPTION_ASSET_FILEPATTERN')) ?? 'original';
     this.assetDownloadSource = parseAssetDownloadSource(getOptionalEnv('SERVER_OPTION_ASSET_DOWNLOAD_SOURCE')) ?? 'original';
     this.albumFolderSeperator = getEnvOrDefault('SERVER_OPTION_ALBUM_SUBFOLDER_PATTERN', " / ");
@@ -243,7 +245,7 @@ export class UserConfigLoader
   }
   private static resolve_user_path(userId?: string): string | undefined
   {
-    const settingsFilePath = "/config/{userId}.yaml"
+    const settingsFilePath = "/config/prefs/{userId}.yaml"
 
     const candidates: string[] = [];
     const normalizedUserId = userId?.trim();

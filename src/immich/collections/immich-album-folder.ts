@@ -9,7 +9,7 @@ import { ImmichAlbumsDirectory } from "./immich-albums-directory";
 import { ImmichAlbumLinkFile } from "./immich-album-link";
 import { ImmichRootUnsortedDirectory } from "./immich-root-commons";
 import { config } from "../../config";
-import { getDesecendantAlbums, ImmichAlbumsDirectoryNode } from "../utils/immich-api-utils";
+import { getAlbumMtime, getDesecendantAlbums, ImmichAlbumsDirectoryNode } from "../utils/immich-api-utils";
 import { ImmichAlbumDirectoryInfo } from '../utils/immich-api-utils';
 import { canRecieveFileFrom, canSendFileTo } from "../utils/immich-fs-utils";
 import { ImmichVirtualDirectory } from "./immich-virtual-directory";
@@ -32,7 +32,6 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
         this.node_data = node
         this.albums_root = albums_root
     }
-
 
     public get_album_data()
     {
@@ -62,6 +61,16 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
         throw new Error("Invalid album folder parent");
 
     }
+    public get_album_modtime()
+    {
+        if (this.node_data.album)
+        {
+            return getAlbumMtime(this.node_data.album)
+        }
+
+        return DateUtils.getDateNow()
+    }
+
     async event_rename(new_name: string): Promise<boolean>
     {
         const separator = ImmichAlbumFolder.SEPERATOR;
@@ -110,13 +119,13 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
         }
 
         await this.file_system.memory.push(filename, this.fullpath, contents, album)
-        this.file_system.getCache().invalidateAssetList(this.fullpath);
+        this.file_system.invalidatePath(this.fullpath);
         super.refresh();
         return true;
     }
     async event_stat(): Promise<VirtualMetadata>
     {
-        return VirtualMetadata.directory_rw(this.name, DateUtils.getTimestampNow())
+        return VirtualMetadata.directory_rw(this.name, this.get_album_modtime())
     }
     async event_mkdir(folderName: string): Promise<boolean>
     {
@@ -169,7 +178,7 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
             const asset = (item as ImmichVirtualAssetFile)
             const album = (this.node_data.album as ImmichAlbumDirectoryInfo)
             await this.file_system.getApi().SERVER_DeleteAssetFromAlbumOnly(album, asset.asset_id)
-            this.file_system.getCache().invalidateAssetList(this.fullpath);
+            this.file_system.invalidatePath(this.fullpath);
             return true
         }
         else
@@ -194,7 +203,7 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
             }
             // Drop cached asset list and force _child_nodes rebuild so the
             // destination shows the newly received file immediately.
-            this.file_system.getCache().invalidateAssetList(this.fullpath);
+            this.file_system.invalidatePath(this.fullpath);
             super.refresh();
             return true;
         }
