@@ -1,7 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { ImmichVirtualAssetFile } from "../collections/immich-virtual-asset-file";
-import { ImmichAlbumDirectoryInfo, ImmichAlbumsDirectoryNode, ImmichUser } from "../utils/immich-api-utils";
+import { ImmichAlbumsDirectoryNode, ImmichUser } from "../utils/immich-api-utils";
 import { ImmichAsset } from "../utils/immich-api-utils";
 import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
 import { DateUtils } from "../../utils/date-utils";
@@ -164,7 +163,7 @@ export class ImmichSessionCache
             logger.warn('ImmichSessionCache', 'LOAD', `Failed to restore asset cache from disk: ${err}`);
         }
     }
-    private save(): void
+    private async save(): Promise<void>
     {
         if (!this._userId) return;
         const filePath = this.filepath();
@@ -172,7 +171,9 @@ export class ImmichSessionCache
         {
             fs.mkdirSync(ASSET_CACHE_DIR, { recursive: true });
             const data: Record<string, ImmichCachedEntry<ImmichAsset>> = Object.fromEntries(this.assetInfoCache);
-            fs.writeFileSync(filePath, JSON.stringify(data), 'utf8');
+            // Use the async variant so the event loop is not blocked while writing
+            // large cache files (can be several MB on a big library).
+            await fs.promises.writeFile(filePath, JSON.stringify(data), 'utf8');
         }
         catch (err)
         {
@@ -186,7 +187,9 @@ export class ImmichSessionCache
         this._saveTimer = setTimeout(() =>
         {
             this._saveTimer = null;
-            this.save();
+            this.save().catch(err =>
+                logger.warn('ImmichSessionCache', 'SAVE', `Async save failed: ${err}`)
+            );
         }, SAVE_DEBOUNCE_MS);
     }
 

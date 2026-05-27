@@ -77,11 +77,43 @@ export class ImmichAPI
     private static readonly downloadSemaphore = new DownloadSemaphore(config.maxConcurrentDLs);
     // Global buffer cache for small assets. Buffer nodes are plain memory — safe to share across
     // connections without ownership issues. Tmp-file nodes are NOT stored here (connection-local only).
+    // Map insertion order gives us a free LRU approximation: entries live at the "end";
+    // on access we delete + re-insert to promote them to MRU.  When the cap is reached
+    // the oldest (first) entry is evicted.
     private static readonly sharedBufferCache = new Map<string, VirtualContentBuffer>();
+    private static readonly SHARED_BUFFER_CACHE_CAP = 1_000; // max in-memory asset buffers
     // In-flight deduplication: at most one active download per asset across ALL connections.
     // Registration is synchronous (no await between get-check and set), so this is race-free
     // under Node.js's single-threaded event loop.
     private static readonly downloadsInFlight = new Map<string, Promise<VirtualContentBuffer>>();
+
+    // LRU helpers for sharedBufferCache.
+    // Map iteration order == insertion order, so the oldest entry is always first().
+    // Promote an entry to MRU by deleting and re-inserting it.
+    private static sharedCacheGet(id: string): VirtualContentBuffer | undefined
+    {
+        const node = ImmichAPI.sharedBufferCache.get(id);
+        if (!node) return undefined;
+        // Promote to MRU position
+        ImmichAPI.sharedBufferCache.delete(id);
+        ImmichAPI.sharedBufferCache.set(id, node);
+        return node;
+    }
+    private static sharedCacheSet(id: string, node: VirtualContentBuffer): void
+    {
+        if (ImmichAPI.sharedBufferCache.has(id))
+        {
+            // Re-promote existing entry (size unchanged, just move to MRU)
+            ImmichAPI.sharedBufferCache.delete(id);
+        }
+        else if (ImmichAPI.sharedBufferCache.size >= ImmichAPI.SHARED_BUFFER_CACHE_CAP)
+        {
+            // Evict LRU (first entry in Map iteration order)
+            const oldest = ImmichAPI.sharedBufferCache.keys().next().value;
+            if (oldest !== undefined) ImmichAPI.sharedBufferCache.delete(oldest);
+        }
+        ImmichAPI.sharedBufferCache.set(id, node);
+    }
 
     constructor(immich_url: string)
     {
@@ -964,12 +996,12 @@ export class ImmichAPI
             const data = await fs.promises.readFile(filepath);
             const buf = new VirtualContentBuffer(undefined, data);
             this.cache.assetFileBuffers.set(asset.id, buf);
-            ImmichAPI.sharedBufferCache.set(asset.id, buf);
+            ImmichAPI.sharedCacheSet(asset.id, buf);
             return buf;
         }
 
         // 3. Global buffer cache — plain memory, safe to share across connections
-        const sharedCached = ImmichAPI.sharedBufferCache.get(asset.id);
+        const sharedCached = ImmichAPI.sharedCacheGet(asset.id);
         if (sharedCached) return sharedCached;
 
         // 4. Determine endpoint
@@ -1014,7 +1046,7 @@ export class ImmichAPI
         {
             // 8. Re-check shared cache inside the semaphore guard.
             //    A connection that had to wait for a slot may find the asset was already downloaded.
-            const cachedAfterWait = ImmichAPI.sharedBufferCache.get(asset.id);
+            const cachedAfterWait = ImmichAPI.sharedCacheGet(asset.id);
             if (cachedAfterWait)
             {
                 resolveInflight(cachedAfterWait);
@@ -1070,7 +1102,7 @@ export class ImmichAPI
             //     at a deleted file.
             if (node.isBuffer)
             {
-                ImmichAPI.sharedBufferCache.set(asset.id, node);
+                ImmichAPI.sharedCacheSet(asset.id, node);
                 this.cache.assetFileBuffers.set(asset.id, node);
             }
 

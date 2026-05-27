@@ -1,12 +1,9 @@
 import { VirtualFile } from "../../filesystem/virtual-file";
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
-import { VirtualNode } from "../../filesystem/virtual-node";
 import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
-import { PathUtils } from "../../utils/path-utils";
 import { ImmichFileSystem } from "../immich-file-system";
-import { getAssetMtime, ImmichAlbumBase } from "../utils/immich-api-utils";
-import { ALBUM_BROWSER_LINK_FILE_NAME, ALBUM_METADATA_FILE_NAME } from "../utils/immich-metadata-utils";
+import { getAssetMtime } from "../utils/immich-api-utils";
 import { ImmichAsset } from "../utils/immich-api-utils";
 import { deleteAssetFromContainer } from "../utils/immich-fs-utils";
 
@@ -47,10 +44,24 @@ export class ImmichVirtualAssetFile extends VirtualFile
     async event_stat(): Promise<VirtualMetadata>
     {
         const api = this.file_system.getApi();
+        const settings = api.getUserSettings();
         let size: number;
-        size = this.asset.fileSizeInByte > 0
-            ? this.asset.fileSizeInByte
-            : await api.SERVER_GetAssetFileSize(this.asset);
+
+        if (settings.assetDownloadSource === 'preview')
+        {
+            // In preview mode the download endpoint is /preview, not /original.
+            // fileSizeInByte reflects the original source file and does NOT match
+            // the actual transcoded preview bytes served.  Always resolve the real
+            // preview byte-count (result is cached in assetFileSizeCache after the
+            // first HEAD request, so warm-path calls are just a Map lookup).
+            size = await api.SERVER_GetAssetFileSize(this.asset);
+        }
+        else
+        {
+            size = this.asset.fileSizeInByte > 0
+                ? this.asset.fileSizeInByte
+                : await api.SERVER_GetAssetFileSize(this.asset);
+        }
 
         return VirtualMetadata.file_ro(this.name, size, getAssetMtime(this.asset));
     }

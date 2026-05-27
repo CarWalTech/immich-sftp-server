@@ -11,11 +11,27 @@ export class VirtualContentBuffer
     filepath?: string;
     checksum?: string; // pre-computed SHA-1 base64; set by SFTP write path to skip re-hash on upload
 
+    // Cached size for tmp/filepath nodes — cleared after each write so the
+    // next access re-measures.  Buffer nodes don't need this (length is O(1)).
+    private _cachedSize?: number;
+
+    // Cached read-fd for filepath nodes — opened lazily, closed in removeCallback.
+    // Avoids a pair of openSync/closeSync on every read() call.
+    private _fd?: number;
+
+    // For buffer nodes: track how many bytes are actually written vs. how many
+    // are allocated (capacity may be larger due to exponential growth).
+    private _bufferLen?: number;
+
     constructor(tmp?: tmp.FileResult, buffer?: Buffer, filepath?: string)
     {
         if (tmp) this.tmp = tmp;
-        if (buffer) this.buffer = buffer;
-        if (filepath) this.filepath = filepath
+        if (buffer)
+        {
+            this.buffer = buffer;
+            this._bufferLen = buffer.length;
+        }
+        if (filepath) this.filepath = filepath;
     }
 
     /** True if this node is backed by a tmp file */
@@ -49,15 +65,23 @@ export class VirtualContentBuffer
     {
         if (this.tmp)
         {
-            return fs.statSync(this.tmp.name).size;
+            if (this._cachedSize !== undefined) return this._cachedSize;
+            const s = fs.statSync(this.tmp.name).size;
+            this._cachedSize = s;
+            return s;
         }
         if (this.buffer)
         {
-            return this.buffer.length;
+            // _bufferLen tracks actual written bytes; buffer.length may be larger
+            // (pre-allocated capacity).
+            return this._bufferLen ?? this.buffer.length;
         }
         if (this.filepath)
         {
-            return fs.statSync(this.filepath).size;
+            if (this._cachedSize !== undefined) return this._cachedSize;
+            const s = fs.statSync(this.filepath).size;
+            this._cachedSize = s;
+            return s;
         }
         throw new Error("VirtualNodeBuffer: no data backing");
     }
@@ -83,27 +107,28 @@ export class VirtualContentBuffer
 
         if (this.buffer)
         {
-            return this.buffer.subarray(offset, offset + length);
+            const end = Math.min(offset + length, this._bufferLen ?? this.buffer.length);
+            return this.buffer.subarray(offset, end);
         }
 
         if (this.filepath)
         {
-            let fd: number | undefined;
+            // Lazy-open: keep the fd across calls so we don't pay openSync/closeSync
+            // for every SFTP READ chunk.  The fd is closed in removeCallback().
+            if (this._fd === undefined)
+            {
+                this._fd = fs.openSync(this.filepath, 'r');
+            }
             try
             {
-                fd = fs.openSync(this.filepath, 'r');
                 const out = Buffer.allocUnsafe(length);
-                const bytes = fs.readSync(fd, out, 0, length, offset);
+                const bytes = fs.readSync(this._fd, out, 0, length, offset);
                 return out.subarray(0, bytes);
             }
             catch (e)
             {
                 logger.error('VCB', 'read', `filepath='${this.filepath}' offset=${offset} len=${length} error:`, e);
                 throw e;
-            }
-            finally
-            {
-                if (fd !== undefined) fs.closeSync(fd);
             }
         }
 
@@ -113,6 +138,9 @@ export class VirtualContentBuffer
     /** Append or write data at an offset */
     write(offset: number, data: Buffer)
     {
+        // Invalidate size cache — the underlying store is about to change.
+        this._cachedSize = undefined;
+
         if (this.tmp)
         {
             fs.writeSync(this.tmp.fd, data, 0, data.length, offset);
@@ -121,15 +149,18 @@ export class VirtualContentBuffer
 
         if (this.buffer)
         {
-            // Expand buffer if needed
             const end = offset + data.length;
             if (end > this.buffer.length)
             {
-                const newBuf = Buffer.alloc(end);
-                this.buffer.copy(newBuf, 0, 0, this.buffer.length);
+                // Exponential growth: double the current capacity (or grow to `end`,
+                // whichever is larger) to avoid O(n²) reallocation on sequential writes.
+                const newCapacity = Math.max(end, this.buffer.length * 2);
+                const newBuf = Buffer.allocUnsafe(newCapacity);
+                this.buffer.copy(newBuf, 0, 0, this._bufferLen ?? this.buffer.length);
                 this.buffer = newBuf;
             }
             data.copy(this.buffer, offset);
+            this._bufferLen = Math.max(this._bufferLen ?? 0, end);
             return;
         }
 
@@ -150,8 +181,11 @@ export class VirtualContentBuffer
         }
         if (this.buffer)
         {
+            const usedBuf = this._bufferLen !== undefined
+                ? this.buffer.subarray(0, this._bufferLen)
+                : this.buffer;
             const { Readable } = require('stream');
-            return Readable.from(this.buffer);
+            return Readable.from(usedBuf);
         }
         if (this.filepath)
         {
@@ -174,7 +208,13 @@ export class VirtualContentBuffer
         }
         if (this.filepath)
         {
-            return; // We don't own the file; nothing to clean up.
+            // Close the cached read-fd if one was opened.
+            if (this._fd !== undefined)
+            {
+                try { fs.closeSync(this._fd); } catch { }
+                this._fd = undefined;
+            }
+            return; // We don't own the file; nothing else to clean up.
         }
         throw new Error("VirtualNodeBuffer: no data backing");
     }
@@ -188,7 +228,10 @@ export class VirtualContentBuffer
         }
         if (this.buffer)
         {
-            return this.buffer.toString('utf8');
+            const usedBuf = this._bufferLen !== undefined
+                ? this.buffer.subarray(0, this._bufferLen)
+                : this.buffer;
+            return usedBuf.toString('utf8');
         }
         if (this.filepath)
         {
@@ -215,4 +258,3 @@ export class VirtualContentBufferUtils
     }
 
 }
-
