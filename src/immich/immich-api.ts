@@ -7,7 +7,7 @@ import { createWriteStream } from 'fs';
 import isValidFilename from 'valid-filename';
 import FormData from 'form-data';
 
-import { ImmichAlbumDirectoryInfo, ImmichTagDirectoryInfo, ImmichTag, mapTagFromApi, applyAlbumDetails, extractCurrentUser, findAlbumNode, getVirtualAlbumTree, ImmichAlbumApiResponse, ImmichAlbumsDirectoryNode, ImmichUser, mapAlbumFromApi, mapAssetFromApi, getAssetMtime, mapFilesFromAssets } from "./utils/immich-api-utils";
+import { ImmichAlbumDirectoryInfo, ImmichTagDirectoryInfo, ImmichTag, mapTagFromApi, applyAlbumDetails, extractCurrentUser, findAlbumNode, getVirtualAlbumTree, ImmichAlbumApiResponse, ImmichUser, mapAlbumFromApi, mapAssetFromApi, getAssetMtime, mapFilesFromAssets } from "./utils/immich-api-utils";
 import { config, UserConfigLoader, UserConfig } from "../config";
 import { PathUtils } from "../utils/path-utils";
 import { AlbumMetadataDocumentUtils } from "./utils/immich-metadata-utils";
@@ -542,23 +542,30 @@ export class ImmichAPI
     public async FETCH_AssetsForAlbum(album: ImmichAlbumDirectoryInfo, parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetItem[]>
     {
         const cacheKey = parent.fullpath;
-        // Single shared fetch avoids calling the album endpoint twice (once for meta
-        // validation, once for data) when cache is cold or stale.
-        let fetchedAlbumData: any = null;
-        const getAlbumData = async () =>
-        {
-            if (!fetchedAlbumData)
-                fetchedAlbumData = await this.callApi({ method: 'GET', endpoint: `albums/${album.id}`, logAction: 'Assets in album', skipResponseLog: true });
-            return fetchedAlbumData;
-        };
 
         return await this.cache.fetchCachedAssetLists(cacheKey, {
-            fetchMeta: async () => { const meta = await getAlbumData(); return { updatedAt: meta?.updatedAt }; },
+            // Use the updatedAt already present on the album object (populated by
+            // FETCH_Albums / GET /api/albums, which is itself TTL-cached in the session).
+            // This eliminates a GET /api/albums/{id} round-trip on every post-TTL
+            // validation.  The detail endpoint is still called in fetchData so that
+            // applyAlbumDetails (description, owner, shared-user list, etc.) runs on
+            // every actual cache miss/stale.
+            fetchMeta: async () => ({ updatedAt: album.updatedAt }),
             fetchData: async () =>
             {
-                const response = await getAlbumData();
+                // Fetch full per-album details (description, albumUsers, etc.) and
+                // run the two visibility queries concurrently.
+                const response = await this.callApi({
+                    method: 'GET',
+                    endpoint: `albums/${album.id}`,
+                    logAction: 'Assets in album',
+                    skipResponseLog: true,
+                });
                 applyAlbumDetails(album, response);
-                return await this.FETCH_AssetsByMetadata({ albumIds: [album.id], visibility: "timeline" }, { albumIds: [album.id], visibility: "archive" })
+                return await this.FETCH_AssetsByMetadata(
+                    { albumIds: [album.id], visibility: "timeline" },
+                    { albumIds: [album.id], visibility: "archive" }
+                );
             },
             buildFiles: (assets) => mapFilesFromAssets(assets, parent, reserved_names)
         });
@@ -588,9 +595,12 @@ export class ImmichAPI
     }
     public async FETCH_AssetsByMetadata(...queries: ImmichMetadataSearchArguments[]): Promise<ImmichAsset[]>
     {
-        const byAssetId = new Map<string, ImmichAsset>();
-        for (const query of queries)
+        // Each query has its own pagination loop.  Run all queries concurrently so that
+        // e.g. the "timeline" and "archive" visibility passes for an album overlap instead
+        // of running back-to-back (~60 ms each → saves ~60 ms per cold album fetch).
+        const runQuery = async (query: ImmichMetadataSearchArguments): Promise<ImmichAsset[]> =>
         {
+            const byId = new Map<string, ImmichAsset>();
             let page = 1;
             while (true)
             {
@@ -614,15 +624,13 @@ export class ImmichAPI
 
                 // Cache-hit fast path: if assetInfoCache already has fresh data for this
                 // asset (updatedAt matches), skip the individual GET assets/{id} call entirely.
-                // Fields missing from search/metadata (e.g. exifInfo.fileSizeInByte) are
-                // already present in the cached full-asset entry.
                 const fetchNeeded: string[] = [];
                 for (const item of items)
                 {
                     if (!item?.id || typeof item.id !== 'string') continue;
                     const cached = this.cache.assetInfoCache.get(item.id);
                     if (cached && item.updatedAt && cached.updatedAt === item.updatedAt)
-                        byAssetId.set(item.id, cached.data);
+                        byId.set(item.id, cached.data);
                     else
                         fetchNeeded.push(item.id);
                 }
@@ -630,17 +638,23 @@ export class ImmichAPI
                 // Fetch misses in parallel — FETCH_Asset handles per-id in-flight dedup.
                 const fetched = await Promise.all(fetchNeeded.map(id => this.FETCH_Asset(id)));
                 for (const asset of fetched)
-                    byAssetId.set(asset.id, asset);
+                    byId.set(asset.id, asset);
 
                 const nextPageRaw = response?.assets?.nextPage;
                 const nextPage = typeof nextPageRaw === 'string' ? Number.parseInt(nextPageRaw, 10) : Number.NaN;
-                if (!Number.isInteger(nextPage) || nextPage <= page || items.length === 0)
-                {
-                    break;
-                }
+                if (!Number.isInteger(nextPage) || nextPage <= page || items.length === 0) break;
                 page = nextPage;
             }
-        }
+            return Array.from(byId.values());
+        };
+
+        // Merge results across all concurrent queries, deduplicating by asset ID.
+        const results = await Promise.all(queries.map(runQuery));
+        const byAssetId = new Map<string, ImmichAsset>();
+        for (const assets of results)
+            for (const asset of assets)
+                byAssetId.set(asset.id, asset);
+
         return Array.from(byAssetId.values());
     }
     public async FETCH_AssetXMP(assetId: string)
@@ -1175,18 +1189,21 @@ export class ImmichAPI
     }
     async SERVER_RemoveAssetsFromTags(assetId: string, toRemove: string[])
     {
-        await this.callApi({
-            method: 'DELETE',
-            endpoint: 'assets/tags',
-            data: JSON.stringify({ tagIds: toRemove, assetIds: [assetId] }),
-            logAction: 'Remove tags from asset via XMP sync',
-        });
+        for (const tagId of toRemove)
+        {
+            await this.callApi({
+                method: 'DELETE',
+                endpoint: `tags/${tagId}/assets`,
+                data: JSON.stringify({ ids: [assetId] }),
+                logAction: 'Remove tags from asset via XMP sync',
+            });
+        }
     }
     async SERVER_AddAssetsToTags(assetId: string, toAdd: string[])
     {
         await this.callApi({
             method: 'PUT',
-            endpoint: 'assets/tags',
+            endpoint: 'tags/assets',
             data: JSON.stringify({ tagIds: toAdd, assetIds: [assetId] }),
             logAction: 'Add tags to asset from XMP',
         });

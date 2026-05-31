@@ -500,45 +500,46 @@ export async function saveAlbumMetadataFileContent({ album, content, currentUser
         await AlbumMetadataDocumentUtils.updateAlbumSharing(immichAPI, album, metadata.sharing.sharedUsers);
     }
 }
-export async function saveAssetMetadataFileContent(asset: ImmichAsset, contents: string, api: ImmichAPI): Promise<void>
+
+export async function _syncAssetTagsFromXmp(asset: ImmichAsset, newTagValues: string[], api: ImmichAPI): Promise<void>
 {
-    async function _syncAssetTagsFromXmp(asset: ImmichAsset, newTagValues: string[], api: ImmichAPI): Promise<void>
+    const currentTagIds = new Set<string>(
+        Array.isArray(asset.tags) ? asset.tags.map((t: any) => String(t.id)).filter(Boolean) : []
+    );
+
+    // Nothing to do if the asset has no tags and the XMP has no tags
+    if (currentTagIds.size === 0 && newTagValues.length === 0) return;
+
+    const allTags = await api.FETCH_Tags();
+
+    // Resolve each XMP tag value to an existing or newly created Immich tag
+    const targetTagIds = new Set<string>();
+    for (const value of newTagValues)
     {
-        const currentTagIds = new Set<string>(
-            Array.isArray(asset.tags) ? asset.tags.map((t: any) => String(t.id)).filter(Boolean) : []
-        );
-
-        // Nothing to do if the asset has no tags and the XMP has no tags
-        if (currentTagIds.size === 0 && newTagValues.length === 0) return;
-
-        const allTags = await api.FETCH_Tags();
-
-        // Resolve each XMP tag value to an existing or newly created Immich tag
-        const targetTagIds = new Set<string>();
-        for (const value of newTagValues)
+        const existing = allTags.find(t => t.value === value || t.name === value);
+        if (existing)
         {
-            const existing = allTags.find(t => t.value === value || t.name === value);
-            if (existing)
-            {
-                targetTagIds.add(existing.id);
-            }
-            else
-            {
-                const created = await api.SERVER_CreateTag(value);
-                if (created?.id) targetTagIds.add(String(created.id));
-            }
+            targetTagIds.add(existing.id);
         }
-
-        const toAdd = [...targetTagIds].filter(id => !currentTagIds.has(id));
-        const toRemove = [...currentTagIds].filter(id => !targetTagIds.has(id));
-
-        if (toAdd.length > 0)
-            await api.SERVER_AddAssetsToTags(asset.id, toAdd)
-
-        if (toRemove.length > 0)
-            await api.SERVER_RemoveAssetsFromTags(asset.id, toRemove)
+        else
+        {
+            const created = await api.SERVER_CreateTag(value);
+            if (created?.id) targetTagIds.add(String(created.id));
+        }
     }
 
+    const toAdd = [...targetTagIds].filter(id => !currentTagIds.has(id));
+    const toRemove = [...currentTagIds].filter(id => !targetTagIds.has(id));
+
+    if (toAdd.length > 0)
+        await api.SERVER_AddAssetsToTags(asset.id, toAdd)
+
+    if (toRemove.length > 0)
+        await api.SERVER_RemoveAssetsFromTags(asset.id, toRemove)
+}
+
+export async function saveAssetMetadataFileContent(asset: ImmichAsset, contents: string, api: ImmichAPI): Promise<void>
+{
     const desc = XMPUtils.getDescNode(XMPUtils.parseSidecar(contents));
 
     // --- Extract fields per Immich XMP priority rules ---
@@ -568,9 +569,16 @@ export async function saveAssetMetadataFileContent(asset: ImmichAsset, contents:
     const newLon = XMPUtils.parseGPS(XMPUtils.extractSimpleValue(desc, 'exif:GPSLongitude') ?? '');
 
     // Tags: Immich priority = digiKam:TagsList > lr:hierarchicalSubject > dc:subject
+    // lr:hierarchicalSubject uses '|' as separator (XMP standard) — normalize to '/'.
+    // It also contains all ancestor paths; keep only leaf entries (not a prefix of any other).
+    const rawHierarchical = XMPUtils.extractListValues(desc, 'lr:hierarchicalSubject')
+        .map(v => v.replace(/\|/g, '/'));
+    const leafHierarchical = rawHierarchical.filter(
+        tag => !rawHierarchical.some(other => other !== tag && other.startsWith(tag + '/'))
+    );
     const newTagValues = [...new Set([
         ...XMPUtils.extractListValues(desc, 'digiKam:TagsList'),
-        ...XMPUtils.extractListValues(desc, 'lr:hierarchicalSubject'),
+        ...leafHierarchical,
         ...XMPUtils.extractListValues(desc, 'dc:subject'),
     ])];
 

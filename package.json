@@ -1,8 +1,8 @@
 {
-  "name": "immich-network-storage",
+  "name": "immich-file-bridge",
   "version": "1.0.0",
-  "description": "Immich Network Storage",
-  "main": "server.js",
+  "description": "Immich File Bridge",
+  "main": "src/server.ts",
   "scripts": {
     "build": "tsc"
   },

@@ -1,10 +1,10 @@
 services:
-  immich-network-storage-api:
+  immich-file-bridge:
     build:
-      context: /omv/apps-compose/immich-network-storage/repo
+      context: .
       dockerfile: Dockerfile
       network: host
-    container_name: immich-network-storage-api
+    container_name: immich-file-bridge
     user: 82:82
     env_file:
       - .env
