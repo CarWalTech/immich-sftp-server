@@ -1,9 +1,10 @@
 services:
-  immich-network-storage-api:
+  immich-file-bridge:
     develop:
       watch:
         - action: rebuild
           path: .
+    user: 82:82
     command: >
       ts-node-dev --inspect=0.0.0.0:9229 src/server.ts
     ports:

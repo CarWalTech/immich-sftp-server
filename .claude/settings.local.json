@@ -8,7 +8,15 @@
       "Bash(npm install *)",
       "Bash(node_modules/.bin/tsc --noEmit)",
       "Bash(ls /omv/apps-compose/immich-network-storage/ 2>/dev/null)",
-      "Read(//omv/apps-compose/immich-network-storage/**)"
+      "Read(//omv/apps-compose/immich-network-storage/**)",
+      "WebFetch(domain:api.immich.app)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(git -C /omv/apps-compose/immich-file-bridge/repo status)",
+      "Bash(git config *)",
+      "Bash(file /omv/apps-compose/immich-file-bridge/repo/.git && ls /omv/apps-compose/immich-file-bridge/ && git config --global --list | grep -E \"safe|path\")",
+      "Read(//omv/apps-compose/immich-file-bridge/**)",
+      "Bash(find /omv/apps-compose/immich-file-bridge -name \"*.json\" -path \"*/.vscode/*\" 2>/dev/null && find /home/ec2-user -name \"settings.json\" -path \"*vscode*\" 2>/dev/null | head -5)",
+      "Read(//home/ec2-user/**)"
     ]
   }
 }
