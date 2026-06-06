@@ -1,6 +1,5 @@
 import fs from 'fs';
 import path from 'path';
-import YAML from 'yaml';
 import { getEnvBoolean, getEnvByteSize, getOptionalEnvNumberRange, getEnvNumber, getEnvOrDefault, getOptionalEnv, getOptionalEnvNumber, requireEnv, NumberRange } from './utils/env-utils';
 import { logger } from './logger';
 import { getOptionalNestedString } from './utils/yaml-utils';
@@ -43,6 +42,13 @@ export class Config
   assetDownloadSource: AssetDownloadSource
   albumFolderSeperator: string
 
+  // server logging settings
+  ENABLE_DEBUG_LOGS: boolean;
+  ENABLE_INFO_LOGS: boolean;
+  ENABLE_WARN_LOGS: boolean;
+  ENABLE_ERROR_LOGS: boolean;
+  ENABLE_EXPLICIT_LOGS: boolean;
+
 
   constructor()
   {
@@ -76,6 +82,12 @@ export class Config
     this.assetFilePattern = parseAssetFileNamePattern(getOptionalEnv('SERVER_OPTION_ASSET_FILEPATTERN')) ?? 'original';
     this.assetDownloadSource = parseAssetDownloadSource(getOptionalEnv('SERVER_OPTION_ASSET_DOWNLOAD_SOURCE')) ?? 'original';
     this.albumFolderSeperator = getEnvOrDefault('SERVER_OPTION_ALBUM_SUBFOLDER_PATTERN', " / ");
+
+    this.ENABLE_DEBUG_LOGS = getEnvBoolean('SERVER_LOGS_DEBUG', false)
+    this.ENABLE_INFO_LOGS = getEnvBoolean('SERVER_LOGS_INFO', true)
+    this.ENABLE_WARN_LOGS = getEnvBoolean('SERVER_LOGS_WARN', true)
+    this.ENABLE_ERROR_LOGS = getEnvBoolean('SERVER_LOGS_ERROR', true)
+    this.ENABLE_EXPLICIT_LOGS = getEnvBoolean('SERVER_LOGS_EXPLICIT', false)
   }
 }
 
@@ -92,30 +104,30 @@ export class UserConfigLoader
 
   public static load_user(user_id: string | undefined): UserConfig
   {
-    return this.read_user_yaml(user_id)
+    return this.read_user_json(user_id)
   }
   public static load_user_or_default(user_id?: string): UserConfig
   {
-    return this.read_user_yaml(user_id)
+    return this.read_user_json(user_id)
   }
-  public static load_user_yaml(user_id: string | undefined): string
+  public static load_user_json(user_id: string | undefined): string
   {
     try
     {
       const result = this.load_user(user_id)
-      return YAML.stringify(result)
+      return JSON.stringify(result, null, 2)
     }
     catch
     {
       return ""
     }
   }
-  public static load_user_from_yaml(content: string, path: string = "internal"): UserConfig
+  public static load_user_from_json(content: string, filePath: string = "internal"): UserConfig
   {
-    const yaml = this.read_yaml(content, path)
-    const envFileNamePattern = parseAssetFileNamePattern(getOptionalNestedString(yaml, ['assetFileNamePattern']));
-    const envDownloadSource = parseAssetDownloadSource(getOptionalNestedString(yaml, ['assetDownloadSource']));
-    const envSubAlbumSeperator = getOptionalNestedString(yaml, ['subAlbumSeperator'])
+    const json = this.read_json(content, filePath)
+    const envFileNamePattern = parseAssetFileNamePattern(getOptionalNestedString(json, ['assetFileNamePattern']));
+    const envDownloadSource = parseAssetDownloadSource(getOptionalNestedString(json, ['assetDownloadSource']));
+    const envSubAlbumSeperator = getOptionalNestedString(json, ['subAlbumSeperator'])
     return {
       subAlbumSeperator: envSubAlbumSeperator ?? this.DEFAULTS.subAlbumSeperator,
       assetDownloadSource: envDownloadSource ?? this.DEFAULTS.assetDownloadSource,
@@ -132,16 +144,16 @@ export class UserConfigLoader
     }
   }
 
-  private static read_yaml(content: string, path: string = "internal")
+  private static read_json(content: string, filePath: string = "internal")
   {
-    const parsed = YAML.parse(content);
+    const parsed = JSON.parse(content);
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
     {
-      throw new Error(`Invalid settings file '${path}': expected a YAML object.`);
+      throw new Error(`Invalid settings file '${filePath}': expected a JSON object.`);
     }
     return parsed as Record<string, unknown>;
   }
-  private static read_user_yaml(userId?: string): UserConfig
+  private static read_user_json(userId?: string): UserConfig
   {
     const settingsFilePath = this.resolve_user_path(userId);
     if (!settingsFilePath) return this.DEFAULTS;
@@ -155,7 +167,7 @@ export class UserConfigLoader
       try
       {
         const content = fs.readFileSync(settingsFilePath, 'utf8');
-        return this.load_user_from_yaml(content, settingsFilePath)
+        return this.load_user_from_json(content, settingsFilePath)
       }
       catch
       {
@@ -172,32 +184,29 @@ export class UserConfigLoader
     const settingsFilePath = this.resolve_user_path(userId);
     if (!settingsFilePath)
     {
-      logger.error("UserScopedConfig", "SaveYAML", "Path not found for user id: ", userId)
+      logger.error("UserScopedConfig", "SaveJSON", "Path not found for user id: ", userId)
       return false;
     }
 
     try
     {
-      // 1. Ensure directory exists
       const dir = path.dirname(settingsFilePath);
       fs.mkdirSync(dir, { recursive: true });
 
-      // 2. Convert to YAML
-      const yamlStr = YAML.stringify(data);
+      const jsonStr = JSON.stringify(data, null, 2);
 
-      // 3. Write file (creates if missing)
-      fs.writeFileSync(settingsFilePath, yamlStr, "utf8");
+      fs.writeFileSync(settingsFilePath, jsonStr, "utf8");
     }
     catch (ex)
     {
-      logger.error("UserScopedConfig", "SaveYAML", "Error Saving YAML: ", ex)
+      logger.error("UserScopedConfig", "SaveJSON", "Error Saving JSON: ", ex)
       return false;
     }
     return true;
   }
   private static resolve_user_path(userId?: string): string | undefined
   {
-    const settingsFilePath = "/config/prefs/{userId}.yaml"
+    const settingsFilePath = "/config/prefs/{userId}.json"
 
     const candidates: string[] = [];
     const normalizedUserId = userId?.trim();

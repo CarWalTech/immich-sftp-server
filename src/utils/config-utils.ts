@@ -68,7 +68,6 @@ export function parseAssetFileNamePattern(value: string | undefined): AssetFileN
     {
         throw new Error(`Invalid asset file name pattern: ${value}. Allowed: original, assetUuid, shortUuid, date, dateUuid, original+assetUuid, original+shortUuid.`);
     }
-    logger.info(`asset file name pattern: ${value} | ${parsed}`)
     return parsed;
 }
 

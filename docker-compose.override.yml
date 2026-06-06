@@ -13,5 +13,7 @@ services:
       - "19000:${SERVER_PORT_WEBDAV}" # WebDAV
     volumes:
       - ./:/app
+    env_file:
+      - .env
     environment:
       NODE_ENV: development

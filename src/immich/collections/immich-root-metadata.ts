@@ -25,7 +25,7 @@ export class ImmichRootMetadataFile extends VirtualFile
 
     constructor(file_system: ImmichFileSystem, parent: ImmichRootDirectory)
     {
-        super("settings.yaml", undefined, parent)
+        super("settings.json", undefined, parent)
         this.root_folder = parent
         this.file_system = file_system
     }
@@ -42,18 +42,18 @@ export class ImmichRootMetadataFile extends VirtualFile
     }
     async event_stat(): Promise<VirtualMetadata>
     {
-        const metadata = UserConfigLoader.load_user_yaml(this.file_system.getCurrentUser()?.id)
+        const metadata = UserConfigLoader.load_user_json(this.file_system.getCurrentUser()?.id)
         return VirtualMetadata.file_rw(this.name, Buffer.byteLength(metadata, 'utf8'), DateUtils.getTimestampNow());
     }
     async event_readfile(): Promise<VirtualContentBuffer>
     {
-        const metadata = UserConfigLoader.load_user_yaml(this.file_system.getCurrentUser()?.id)
+        const metadata = UserConfigLoader.load_user_json(this.file_system.getCurrentUser()?.id)
         return VirtualContentBufferUtils.bufferFromString(metadata);
     }
     async event_writefile(contents: VirtualContentBuffer): Promise<boolean>
     {
         const content = fs.readFileSync(contents.name, 'utf8');
-        const metadata = UserConfigLoader.load_user_from_yaml(content)
+        const metadata = UserConfigLoader.load_user_from_json(content)
         UserConfigLoader.save_user(this.file_system.getCurrentUser()?.id, metadata)
         this.file_system.getApi().CACHE_InvalidateUserConfig();
         contents.removeCallback();

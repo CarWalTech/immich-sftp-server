@@ -2,15 +2,12 @@ import path from "path";
 import { BaseLogger, ILogObjMeta, ISettingsParam, ILogObj, Logger } from "tslog";
 import { getEnvBoolean } from "./utils/env-utils";
 import { createStream } from "rotating-file-stream";
+import { config } from "./config";
 
 
 const IGNORED_COMBINATIONS: Record<string, string[]> = {}
 
-const ENABLE_DEBUG_LOGS = getEnvBoolean('SERVER_LOGS_DEBUG', false)
-const ENABLE_INFO_LOGS = getEnvBoolean('SERVER_LOGS_INFO', true)
-const ENABLE_WARN_LOGS = getEnvBoolean('SERVER_LOGS_WARN', true)
-const ENABLE_ERROR_LOGS = getEnvBoolean('SERVER_LOGS_ERROR', true)
-const ENABLE_EXPLICIT_LOGS = getEnvBoolean('SERVER_LOGS_EXPLICIT', false)
+
 
 
 const fileGenerator = (time: any, index: any) =>
@@ -52,6 +49,8 @@ const fileTransport = (logObj: any) =>
 
 export class CustomLogger<LogObj> extends BaseLogger<LogObj>
 {
+
+
     constructor(settings?: ISettingsParam<LogObj>, logObj?: LogObj)
     {
         super(settings, logObj, 5);
@@ -99,35 +98,35 @@ export class CustomLogger<LogObj> extends BaseLogger<LogObj>
 
     public debug(...args: unknown[]): LogObj & ILogObjMeta | undefined
     {
-        if (!ENABLE_DEBUG_LOGS) return;
+        if (config.ENABLE_DEBUG_LOGS == false) return;
         if (this.is_ignored(args)) return;
         args = this.format_args(args)
         return super.log(2, "DEBUG", ...args);
     }
     public info(...args: unknown[]): LogObj & ILogObjMeta | undefined
     {
-        if (!ENABLE_INFO_LOGS) return;
+        if (config.ENABLE_INFO_LOGS == false) return;
         if (this.is_ignored(args)) return;
         args = this.format_args(args)
         return super.log(3, "INFO", ...args);
     }
     public warn(...args: unknown[]): LogObj & ILogObjMeta | undefined
     {
-        if (!ENABLE_WARN_LOGS) return;
+        if (config.ENABLE_WARN_LOGS == false) return;
         if (this.is_ignored(args)) return;
         args = this.format_args(args)
         return super.log(4, "WARN", ...args);
     }
     public error(...args: unknown[]): LogObj & ILogObjMeta | undefined
     {
-        if (!ENABLE_ERROR_LOGS) return;
+        if (config.ENABLE_ERROR_LOGS == false) return;
         if (this.is_ignored(args)) return;
         args = this.format_args(args)
         return super.log(5, "ERROR", ...args);
     }
     public explicit(...args: unknown[]): LogObj & ILogObjMeta | undefined
     {
-        if (!ENABLE_EXPLICIT_LOGS) return;
+        if (config.ENABLE_EXPLICIT_LOGS == false) return;
         if (this.is_ignored(args)) return;
         args = this.format_args(args)
         return super.log(6, "EXPLICIT", ...args)
