@@ -6,7 +6,7 @@ import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { PathUtils } from "../../utils/path-utils";
 import { ImmichFileSystem } from "../immich-file-system";
 import { getAssetMtime, ImmichAlbumBase } from "../utils/immich-api-utils";
-import { ALBUM_BROWSER_LINK_FILE_NAME, ALBUM_METADATA_FILE_NAME, buildAlbumMetadataUserYaml, buildAssetMetadataXMP as buildAssetMetadataXMP, saveAssetMetadataFileContent } from "../utils/immich-metadata-utils";
+import { buildAlbumMetadataUserYaml, buildAssetMetadataXMP as buildAssetMetadataXMP, saveAssetMetadataFileContent } from "../utils/immich-metadata-utils";
 import { ImmichAsset } from "../utils/immich-api-utils";
 import { deleteAssetFromContainer } from "../utils/immich-fs-utils";
 import { ImmichSessionCache } from "../cache/immich-session-cache";

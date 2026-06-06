@@ -190,6 +190,10 @@ export class ImmichFileSystem implements VirtualFileSystem
     {
         return this.immichApi.getUser()
     }
+    public getCurrentUserView()
+    {
+        return this.immichApi.getUserView()
+    }
     public isAuthenticated(): boolean
     {
         return this.immichApi.getUser() !== null;

@@ -1,4 +1,4 @@
-export function getOptionalNestedString(source: Record<string, unknown>, path: string[]): string | undefined
+export function getOptionalNestedString(source: Record<string, unknown>, path: string[], needsTrim: boolean = true): string | undefined
 {
     let current: unknown = source;
     for (const part of path)
@@ -14,7 +14,7 @@ export function getOptionalNestedString(source: Record<string, unknown>, path: s
     {
         return undefined;
     }
-    const normalized = current.trim();
+    const normalized = needsTrim ? current.trim() : current;
     return normalized === '' ? undefined : normalized;
 }
 

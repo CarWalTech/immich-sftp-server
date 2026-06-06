@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { getEnvBoolean, getEnvByteSize, getOptionalEnvNumberRange, getEnvNumber, getEnvOrDefault, getOptionalEnv, getOptionalEnvNumber, requireEnv, NumberRange } from './utils/env-utils';
 import { logger } from './logger';
-import { getOptionalNestedString } from './utils/yaml-utils';
+import { getOptionalNestedBoolean, getOptionalNestedString } from './utils/yaml-utils';
 import { AssetDownloadSource, AssetFileNamePattern, parseAssetDownloadSource, parseAssetFileNamePattern } from './utils/config-utils';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -96,21 +96,22 @@ export interface UserConfig
   subAlbumSeperator: string
   assetFileNamePattern: AssetFileNamePattern
   assetDownloadSource: AssetDownloadSource
+  assetSidecarsEnabled: boolean
 }
 
 export class UserConfigLoader
 {
   static readonly DEFAULTS: UserConfig = UserConfigLoader.load_defaults()
 
-  public static load_user(user_id: string | undefined): UserConfig
+  public static load_user(user_id: string | undefined, view_id: string | null = null): UserConfig
   {
-    return this.read_user_json(user_id)
+    return this.read_user_json(user_id, view_id)
   }
-  public static load_user_or_default(user_id?: string): UserConfig
+  public static load_user_or_default(user_id?: string, view_id: string | null = null): UserConfig
   {
-    return this.read_user_json(user_id)
+    return this.read_user_json(user_id, view_id)
   }
-  public static load_user_json(user_id: string | undefined): string
+  public static load_user_json(user_id: string | undefined, view_id: string | null = null): string
   {
     try
     {
@@ -127,11 +128,13 @@ export class UserConfigLoader
     const json = this.read_json(content, filePath)
     const envFileNamePattern = parseAssetFileNamePattern(getOptionalNestedString(json, ['assetFileNamePattern']));
     const envDownloadSource = parseAssetDownloadSource(getOptionalNestedString(json, ['assetDownloadSource']));
-    const envSubAlbumSeperator = getOptionalNestedString(json, ['subAlbumSeperator'])
+    const envSubAlbumSeperator = getOptionalNestedString(json, ['subAlbumSeperator'], false)
+    const envEnableSidecarFiles = getOptionalNestedBoolean(json, ['assetSidecarsEnabled'])
     return {
       subAlbumSeperator: envSubAlbumSeperator ?? this.DEFAULTS.subAlbumSeperator,
       assetDownloadSource: envDownloadSource ?? this.DEFAULTS.assetDownloadSource,
-      assetFileNamePattern: envFileNamePattern ?? this.DEFAULTS.assetFileNamePattern
+      assetFileNamePattern: envFileNamePattern ?? this.DEFAULTS.assetFileNamePattern,
+      assetSidecarsEnabled: envEnableSidecarFiles ?? this.DEFAULTS.assetSidecarsEnabled
     }
   }
   public static load_defaults(): UserConfig
@@ -140,7 +143,8 @@ export class UserConfigLoader
     return {
       subAlbumSeperator: config.albumFolderSeperator,
       assetFileNamePattern: config.assetFilePattern,
-      assetDownloadSource: config.assetDownloadSource
+      assetDownloadSource: config.assetDownloadSource,
+      assetSidecarsEnabled: config.assetSidecarsEnabled
     }
   }
 
@@ -153,9 +157,9 @@ export class UserConfigLoader
     }
     return parsed as Record<string, unknown>;
   }
-  private static read_user_json(userId?: string): UserConfig
+  private static read_user_json(userId?: string, view_id: string | null = null): UserConfig
   {
-    const settingsFilePath = this.resolve_user_path(userId);
+    const settingsFilePath = this.resolve_user_path(userId, view_id);
     if (!settingsFilePath) return this.DEFAULTS;
 
     if (!fs.existsSync(settingsFilePath))
@@ -179,12 +183,12 @@ export class UserConfigLoader
 
   }
 
-  public static save_user(userId: string | undefined, data: UserConfigLoader): boolean
+  public static save_user(userId: string | undefined, viewId: string | null, data: UserConfigLoader): boolean
   {
-    const settingsFilePath = this.resolve_user_path(userId);
+    const settingsFilePath = this.resolve_user_path(userId, viewId);
     if (!settingsFilePath)
     {
-      logger.error("UserScopedConfig", "SaveJSON", "Path not found for user id: ", userId)
+      logger.error("UserScopedConfig", "SaveJSON", "Path not found for user id / viewId: ", `${userId} / ${viewId}`)
       return false;
     }
 
@@ -204,22 +208,25 @@ export class UserConfigLoader
     }
     return true;
   }
-  private static resolve_user_path(userId?: string): string | undefined
+  private static resolve_user_path(userId?: string, viewId: string | null = null): string | undefined
   {
-    const settingsFilePath = "/config/prefs/{userId}.json"
+    const settingsFilePath = "/config/prefs/{fileName}.json"
 
     const candidates: string[] = [];
     const normalizedUserId = userId?.trim();
+    const normalizedViewId = viewId != null ? `.${viewId.trim()}` : ""
+    const normalizedFileName = `${normalizedUserId}${normalizedViewId}`;
+
     if (normalizedUserId && UUID_PATTERN.test(normalizedUserId))
     {
-      if (settingsFilePath.includes('{userId}'))
+      if (settingsFilePath.includes('{fileName}'))
       {
-        candidates.push(settingsFilePath.replace(/\{userId\}/g, normalizedUserId));
+        candidates.push(settingsFilePath.replace(/\{fileName\}/g, normalizedFileName));
       }
       else
       {
         const parsed = path.parse(settingsFilePath);
-        const fileName = `${parsed.name}.${normalizedUserId}${parsed.ext}`;
+        const fileName = `${parsed.name}.${normalizedFileName}${parsed.ext}`;
         candidates.push(parsed.dir ? path.join(parsed.dir, fileName) : fileName);
       }
     }

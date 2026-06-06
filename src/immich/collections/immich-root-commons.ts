@@ -7,15 +7,17 @@ import { PathUtils } from "../../utils/path-utils";
 import { ImmichFileSystem } from "../immich-file-system";
 import { ImmichRootDirectory } from "./immich-root-directory";
 import { ImmichVirtualAssetFile } from "./immich-virtual-asset-file";
-import { canRecieveFileFrom, canSendFileTo } from "../utils/immich-fs-utils";
+import { canRecieveFileFrom, canSendFileTo, DIRNAME_TRASH, DIRNAME_UNSORTED } from "../utils/immich-fs-utils";
 import { ImmichVirtualDirectory } from "./immich-virtual-directory";
 import { DateUtils } from "../../utils/date-utils";
+import { ImmichWebLinkFile } from "./immich-web-link";
+import { generateTrashBrowserLink } from "../utils/immich-metadata-utils";
 
 export class ImmichRootUnsortedDirectory extends ImmichVirtualDirectory
 {
     constructor(file_system: ImmichFileSystem, root: ImmichRootDirectory)
     {
-        super(file_system, "unsorted", undefined, root, { sendFn: canSendFileTo, recieveFn: canRecieveFileFrom, refreshOnMove: true, refreshOnReadDir: true })
+        super(file_system, DIRNAME_UNSORTED, undefined, root, { sendFn: canSendFileTo, recieveFn: canRecieveFileFrom, refreshOnMove: true, refreshOnReadDir: true })
     }
     async event_rebuild(): Promise<Map<string, VirtualNode>>
     {
@@ -67,13 +69,22 @@ export class ImmichRootTrashDirectory extends ImmichVirtualDirectory
 {
     constructor(file_system: ImmichFileSystem, root: ImmichRootDirectory)
     {
-        super(file_system, "trash", undefined, root, { sendFn: canSendFileTo, recieveFn: canRecieveFileFrom, refreshOnMove: true, refreshOnReadDir: true })
+        super(file_system, DIRNAME_TRASH, undefined, root, { sendFn: canSendFileTo, recieveFn: canRecieveFileFrom, refreshOnMove: true, refreshOnReadDir: true })
     }
     async event_rebuild(): Promise<Map<string, VirtualNode>>
     {
+        const metadata = new ImmichTrashLinkFile(this, this.file_system)
+
+        var metadata_files = new Map([
+            [metadata.name, metadata as VirtualNode],
+        ])
+
         var assets = await this.file_system.getApi().FETCH_AssetsForTrash(this, new Set());
         var asset_files = new Map(assets.map(asset => ([asset.name, asset as VirtualNode])))
-        return asset_files;
+        return new Map([
+            ...Array.from(metadata_files.entries()),
+            ...Array.from(asset_files.entries())
+        ]);
     }
     async event_stat(): Promise<VirtualMetadata>
     {
@@ -108,5 +119,28 @@ export class ImmichRootTrashDirectory extends ImmichVirtualDirectory
         {
             return false;
         }
+    }
+}
+
+export class ImmichTrashLinkFile extends ImmichWebLinkFile
+{
+    constructor(parent: ImmichRootTrashDirectory, file_system: ImmichFileSystem)
+    {
+        super(parent, file_system)
+    }
+
+    async event_buildlink()
+    {
+        return generateTrashBrowserLink(this.file_system.getUrl())
+    }
+
+    async event_getmodtime()
+    {
+        return DateUtils.getTimestampNow()
+    }
+
+    async event_readlink()
+    {
+        return generateTrashBrowserLink(this.file_system.getUrl())
     }
 }

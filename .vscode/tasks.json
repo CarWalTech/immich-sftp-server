@@ -8,12 +8,15 @@
             "dependsOn": [
                 "docker-compose: rm-debug",
                 "docker-compose: up-debug"
-            ]
+            ],
         },
         {
             "label": "docker-compose: up-debug",
             "type": "shell",
-            "command": "docker compose -f docker-compose.yml -f docker-compose.override.yml up --build -d",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "command": "docker compose -f docker-compose.yml -f docker-compose.override.yml up --build --force-recreate -d",
             "presentation": {
                 "close": true
             }
@@ -21,34 +24,44 @@
         {
             "label": "docker-compose: rm-debug",
             "type": "shell",
-            "command": "docker compose -f docker-compose.yml rm -f",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "command": "docker compose -f docker-compose.yml -f docker-compose.override.yml down",
             "presentation": {
                 "close": true
             }
         },
         {
-            "label": "docker-compose: up-debug",
-            "type": "shell",
-            "command": "docker compose -f docker-compose.yml up --build"
-        },
-        {
             "label": "docker-compose: up",
             "type": "shell",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
             "command": "docker compose -f docker-compose.yml up"
         },
         {
             "label": "docker-compose: build",
             "type": "shell",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
             "command": "docker compose -f docker-compose.yml build"
         },
         {
             "label": "docker-compose: down",
             "type": "shell",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
             "command": "docker compose -f docker-compose.yml down"
         },
         {
             "label": "docker-compose: rm",
             "type": "shell",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
             "command": "docker compose -f docker-compose.yml rm"
         }
     ]

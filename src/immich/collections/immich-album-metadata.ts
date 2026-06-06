@@ -7,7 +7,7 @@ import { PathUtils } from "../../utils/path-utils";
 import { ImmichFileSystem } from "../immich-file-system";
 import { getAlbumMtime, ImmichAlbumBase } from "../utils/immich-api-utils";
 import { ImmichRootDirectory } from "./immich-root-directory";
-import { ALBUM_BROWSER_LINK_FILE_NAME, ALBUM_METADATA_FILE_NAME } from "../utils/immich-metadata-utils";
+import { FILENAME_ALBUM_PROPERTIES } from '../utils/immich-fs-utils';
 import tmp from 'tmp';
 import { VirtualContentBufferUtils } from "../../filesystem/virtual-content-buffer";
 import { saveAlbumMetadataFileContent, buildAlbumBrowserLink, buildAlbumMetadataUserYaml } from "../utils/immich-metadata-utils";
@@ -22,9 +22,9 @@ export class ImmichAlbumMetadataFile extends VirtualFile
     private file_system: ImmichFileSystem
     private album_folder: ImmichAlbumFolder
 
-    constructor(album: ImmichAlbumDirectoryInfo, fsName: string, parent: ImmichAlbumFolder, file_system: ImmichFileSystem)
+    constructor(album: ImmichAlbumDirectoryInfo, parent: ImmichAlbumFolder, file_system: ImmichFileSystem)
     {
-        super(fsName, undefined, parent)
+        super(FILENAME_ALBUM_PROPERTIES, undefined, parent)
         this.album_folder = parent
         this.file_system = file_system
         this.album = album

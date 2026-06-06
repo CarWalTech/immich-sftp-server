@@ -7,7 +7,7 @@ import { PathUtils } from "../../utils/path-utils";
 import { ImmichFileSystem } from "../immich-file-system";
 import { getAlbumMtime, ImmichAlbumBase } from "../utils/immich-api-utils";
 import { ImmichRootDirectory } from "./immich-root-directory";
-import { ALBUM_BROWSER_LINK_FILE_NAME, ALBUM_METADATA_FILE_NAME } from "../utils/immich-metadata-utils";
+import { FILENAME_FILESYSTEM_OPTIONS } from '../utils/immich-fs-utils';
 import tmp from 'tmp';
 import { VirtualContentBufferUtils } from "../../filesystem/virtual-content-buffer";
 import { saveAlbumMetadataFileContent, buildAlbumBrowserLink, buildAlbumMetadataUserYaml } from "../utils/immich-metadata-utils";
@@ -25,7 +25,7 @@ export class ImmichRootMetadataFile extends VirtualFile
 
     constructor(file_system: ImmichFileSystem, parent: ImmichRootDirectory)
     {
-        super("settings.json", undefined, parent)
+        super(FILENAME_FILESYSTEM_OPTIONS, undefined, parent)
         this.root_folder = parent
         this.file_system = file_system
     }
@@ -54,7 +54,7 @@ export class ImmichRootMetadataFile extends VirtualFile
     {
         const content = fs.readFileSync(contents.name, 'utf8');
         const metadata = UserConfigLoader.load_user_from_json(content)
-        UserConfigLoader.save_user(this.file_system.getCurrentUser()?.id, metadata)
+        UserConfigLoader.save_user(this.file_system.getCurrentUser()?.id, this.file_system.getCurrentUserView(), metadata)
         this.file_system.getApi().CACHE_InvalidateUserConfig();
         contents.removeCallback();
         this.root_folder.refresh()

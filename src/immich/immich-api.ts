@@ -32,6 +32,7 @@ export class ImmichAPI
     private authMode: 'bearer' | 'api-key' = 'bearer';
     private uploadQueue: Array<ImmichUploadItem> = [];
     private currentUser: ImmichUser | null = null;
+    private currentView: string | null = null;
     private userSettings: UserConfig;
     private shouldLogoutSession = false;
     private readonly baseUrl;
@@ -47,9 +48,11 @@ export class ImmichAPI
     }
 
     // #region User Authentication
+
+
     public async login(username: string, password: string)
     {
-        const trimmedUsername = username.trim();
+        const { trimmedUsername, trimmedView } = this.initUsername(username.trim());
         const trimmedPassword = password.trim();
 
         if (trimmedUsername === 'apikey')
@@ -68,8 +71,9 @@ export class ImmichAPI
                 skipResponseLog: true,
             });
             this.currentUser = extractCurrentUser(me, 'api-key');
+            this.currentView = trimmedView;
             const userId = StringUtils2.getTrimmedString(this.currentUser?.id);
-            this.userSettings = UserConfigLoader.load_user_or_default(userId || undefined);
+            this.userSettings = UserConfigLoader.load_user_or_default(userId || undefined, this.currentView);
             return;
         }
 
@@ -90,6 +94,7 @@ export class ImmichAPI
 
         // Try to get current user from login response first
         this.currentUser = extractCurrentUser(loginResp.user, trimmedUsername);
+        this.currentView = trimmedView;
 
         // Fallback to users/me endpoint
         if (!this.currentUser?.id || !this.currentUser?.username)
@@ -98,7 +103,7 @@ export class ImmichAPI
         }
 
         const userId = StringUtils2.getTrimmedString(this.currentUser?.id);
-        this.userSettings = UserConfigLoader.load_user_or_default(userId || undefined);
+        this.userSettings = UserConfigLoader.load_user_or_default(userId || undefined, this.currentView);
     }
     public async logout(): Promise<void>
     {
@@ -137,6 +142,16 @@ export class ImmichAPI
             };
         }
     }
+    private initUsername(username: string): { trimmedUsername: string; trimmedView: string | null }
+    {
+        const lastAt = username.lastIndexOf('@');
+        if (lastAt === -1) return { trimmedUsername: username, trimmedView: null };
+
+        const suffix = username.slice(lastAt + 1);
+        if (suffix.includes('.')) return { trimmedUsername: username, trimmedView: null };
+
+        return { trimmedUsername: username.slice(0, lastAt), trimmedView: suffix || null };
+    }
     // #endregion
 
     // #region Get Methods
@@ -148,6 +163,10 @@ export class ImmichAPI
     public getUser()
     {
         return this.currentUser
+    }
+    public getUserView()
+    {
+        return this.currentView
     }
     public getBaseUrl()
     {
@@ -448,8 +467,8 @@ export class ImmichAPI
             {
                 return { updatedAt: DateUtils.getTimeStringNowISO() }
             },
-            buildFiles: (assets) => mapFilesFromAssets(assets, parent, reserved_names)
-        });
+            buildFiles: (assets, settings) => mapFilesFromAssets(assets, parent, reserved_names, settings.assetSidecarsEnabled)
+        }, this.userSettings);
     }
     public async FETCH_AssetsForTrash(parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetItem[]>
     {
@@ -465,8 +484,8 @@ export class ImmichAPI
             {
                 return { updatedAt: DateUtils.getTimeStringNowISO() }
             },
-            buildFiles: (assets) => mapFilesFromAssets(assets, parent, reserved_names)
-        });
+            buildFiles: (assets, settings) => mapFilesFromAssets(assets, parent, reserved_names, settings.assetSidecarsEnabled)
+        }, this.userSettings);
     }
     public async FETCH_AssetsForAlbum(album: ImmichAlbumDirectoryInfo, parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetItem[]>
     {
@@ -496,8 +515,8 @@ export class ImmichAPI
                     { albumIds: [album.id], visibility: "archive" }
                 );
             },
-            buildFiles: (assets) => mapFilesFromAssets(assets, parent, reserved_names)
-        });
+            buildFiles: (assets, settings) => mapFilesFromAssets(assets, parent, reserved_names, settings.assetSidecarsEnabled)
+        }, this.userSettings);
     }
     public async FETCH_AssetsForTag(tag: ImmichTagDirectoryInfo, parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetItem[]>
     {
@@ -519,8 +538,8 @@ export class ImmichAPI
             {
                 return await this.FETCH_AssetsByMetadata({ tagIds: [tag.id], visibility: "timeline" }, { tagIds: [tag.id], visibility: "archive" })
             },
-            buildFiles: (assets) => mapFilesFromAssets(assets, parent, reserved_names)
-        });
+            buildFiles: (assets, settings) => mapFilesFromAssets(assets, parent, reserved_names, settings.assetSidecarsEnabled)
+        }, this.userSettings);
     }
     public async FETCH_AssetsByMetadata(...queries: ImmichMetadataSearchArguments[]): Promise<ImmichAsset[]>
     {
@@ -1153,7 +1172,8 @@ export class ImmichAPI
 
     public CACHE_InvalidateUserConfig()
     {
-        this.userSettings = UserConfigLoader.load_user_or_default();
+        const userId = StringUtils2.getTrimmedString(this.currentUser?.id);
+        this.userSettings = UserConfigLoader.load_user_or_default(userId || undefined, this.currentView);
         this.cache.invalidateAll();
     }
 

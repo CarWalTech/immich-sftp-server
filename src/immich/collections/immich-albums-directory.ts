@@ -10,12 +10,13 @@ import { ImmichAlbumDirectoryInfo } from '../utils/immich-api-utils';
 import { ImmichAlbumsDirectoryNode } from "../utils/immich-api-utils";
 import { ImmichVirtualDirectory } from "./immich-virtual-directory";
 import { DateUtils } from "../../utils/date-utils";
+import { DIRNAME_ALBUMS } from "../utils/immich-fs-utils";
 
 export class ImmichAlbumsDirectory extends ImmichVirtualDirectory
 {
     constructor(file_system: ImmichFileSystem, root: ImmichRootDirectory)
     {
-        super(file_system, "albums", undefined, root, { refreshOnReadDir: true })
+        super(file_system, DIRNAME_ALBUMS, undefined, root, { refreshOnReadDir: true })
     }
 
     async event_stat(): Promise<VirtualMetadata>

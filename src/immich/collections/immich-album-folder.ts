@@ -3,7 +3,6 @@ import { VirtualNode } from "../../filesystem/virtual-node";
 import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { ImmichFileSystem } from "../immich-file-system";
-import { ALBUM_BROWSER_LINK_FILE_NAME, ALBUM_METADATA_FILE_NAME } from "../utils/immich-metadata-utils";
 import { ImmichVirtualAssetFile } from "./immich-virtual-asset-file";
 import { ImmichAlbumsDirectory } from "./immich-albums-directory";
 import { ImmichAlbumLinkFile } from "./immich-album-link";
@@ -153,9 +152,12 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
         var sub_folders = new Map([...this.node_data.children.values()].map(node => ([node.fsName, new ImmichAlbumFolder(this.file_system, this.albums_root, this, node) as VirtualNode])))
         if (this.node_data.album)
         {
+            const metadata = new ImmichAlbumMetadataFile(this.node_data.album, this, this.file_system)
+            const link = new ImmichAlbumLinkFile(this.node_data.album, this, this.file_system)
+
             var metadata_files = new Map([
-                [ALBUM_METADATA_FILE_NAME, new ImmichAlbumMetadataFile(this.node_data.album, ALBUM_METADATA_FILE_NAME, this, this.file_system) as VirtualNode],
-                [ALBUM_BROWSER_LINK_FILE_NAME, new ImmichAlbumLinkFile(this.node_data.album, ALBUM_BROWSER_LINK_FILE_NAME, this, this.file_system) as VirtualNode]
+                [metadata.name, metadata as VirtualNode],
+                [link.name, link as VirtualNode]
             ])
 
             var reserved_names = Array.from(sub_folders.keys()).concat(Array.from(metadata_files.keys()))

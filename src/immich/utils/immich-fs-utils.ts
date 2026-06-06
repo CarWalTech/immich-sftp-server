@@ -8,6 +8,14 @@ import { ImmichAPI } from "../immich-api";
 import tmp from "tmp"
 import path from "path";
 
+export const FILENAME_FILESYSTEM_OPTIONS = '[SETTINGS].json';
+export const FILENAME_ALBUM_PROPERTIES = '[ALBUM].yaml';
+export const FILENAME_OPEN_IN_IMMICH = '[IMMICH].html';
+
+export const DIRNAME_ALBUMS = "Albums"
+export const DIRNAME_TRASH = "Trash"
+export const DIRNAME_UNSORTED = "Unsorted"
+
 export async function deleteAssetFromContainer(item: ImmichVirtualAssetFile, api: ImmichAPI, container: VirtualDirectory): Promise<boolean>
 {
     if (item.asset_data)
@@ -112,4 +120,6 @@ export function canRecieveFileFrom(item: VirtualNode, container: VirtualDirector
         return false;
     }
 }
+
+
 

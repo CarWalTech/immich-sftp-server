@@ -9,11 +9,6 @@ import { config } from '../../config';
 import Builder from 'fast-xml-builder';
 import { XMPUtils } from '../../utils/xmp-utils';
 
-// Exported Constants
-export const TAG_METADATA_FILE_NAME = 'tag.yaml';
-export const ALBUM_METADATA_FILE_NAME = 'album.yaml';
-export const ALBUM_BROWSER_LINK_FILE_NAME = 'immich.html';
-
 // Constants
 const NOSYNC_TAG = '#nosync';
 const NOSYNC_TAG_REGEX = /(?:^|\s)#nosync(?:\s|$)/g;
@@ -213,13 +208,22 @@ export class AlbumMetadataDocumentUtils
 export function generateAlbumBrowserLink(baseUrl: string, albumId: string): string
 {
     const url = `${baseUrl}/albums/${albumId}`;
+    return generateBrowserLink(url, "Open album in Immich")
+}
+export function generateTrashBrowserLink(baseUrl: string): string
+{
+    const url = `${baseUrl}/trash`;
+    return generateBrowserLink(url, "Open trash in Immich")
+}
+export function generateBrowserLink(url: string, title: string): string
+{
     const safeUrl = AlbumMetadataDocumentUtils.escapeHtml(url);
     return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta http-equiv="refresh" content="0;url=${safeUrl}">
-  <title>Open album in Immich</title>
+  <title>${title}</title>
 </head>
 <body>
   <p>Opening album… If not redirected, <a href="${safeUrl}">click here</a>.</p>

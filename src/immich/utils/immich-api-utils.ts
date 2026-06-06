@@ -412,7 +412,7 @@ export function mapAssetFromApi(asset: any): ImmichAsset
         fileSizeInByte: asset.exifInfo?.fileSizeInByte ?? 0,
     };
 }
-export function mapFilesFromAssets(assets: ImmichAsset[], parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Array<ImmichVirtualAssetItem>
+export function mapFilesFromAssets(assets: ImmichAsset[], parent: ImmichVirtualDirectory, reserved_names?: Set<string>, enableSidecars: boolean = true): Array<ImmichVirtualAssetItem>
 {
     function buildUniqueName(base: string, extension: string, reserved: Set<string>, nameCount: Map<string, number>): string
     {
@@ -441,8 +441,6 @@ export function mapFilesFromAssets(assets: ImmichAsset[], parent: ImmichVirtualD
         nameCount.set(actual_name, count + 1);
         return finalName;
     }
-
-    const enableSidecars = config.assetSidecarsEnabled;
 
     const files = new Array<ImmichVirtualAssetItem>(enableSidecars ? assets.length * 2 : assets.length);
     const reservedNames = reserved_names ?? new Set<string>();

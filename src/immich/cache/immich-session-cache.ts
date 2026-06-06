@@ -6,7 +6,7 @@ import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
 import { DateUtils } from "../../utils/date-utils";
 import { logger } from "../../logger";
 import { ImmichVirtualAssetItem } from "../collections/immich-virtual-directory";
-import { config } from '../../config';
+import { config, UserConfig } from '../../config';
 import { AssetDownloadSource } from '../../utils/config-utils';
 import { ImmichAPI } from '../immich-api';
 import { buildAssetMetadataXMP } from '../utils/immich-metadata-utils';
@@ -45,7 +45,7 @@ export interface ImmichAssetCacheFetchArgs
     // file system. The raw ImmichAsset[] are shared/cached across connections;
     // the VirtualFile wrappers are rebuilt each time so they never embed a
     // stale connection reference.
-    buildFiles: (assets: ImmichAsset[]) => ImmichVirtualAssetItem[];
+    buildFiles: (assets: ImmichAsset[], settings: UserConfig) => ImmichVirtualAssetItem[];
 }
 
 export interface ImmichTreeCacheFetchArgs
@@ -278,7 +278,7 @@ export class ImmichSessionCache
         promise.finally(() => this.inFlightAssetFetches.delete(assetId)).catch(() => { });
         return promise;
     }
-    public async fetchCachedAssetLists(cacheKey: string, { fetchMeta, fetchData, buildFiles }: ImmichAssetCacheFetchArgs): Promise<ImmichVirtualAssetItem[]>
+    public async fetchCachedAssetLists(cacheKey: string, { fetchMeta, fetchData, buildFiles }: ImmichAssetCacheFetchArgs, settings: UserConfig): Promise<ImmichVirtualAssetItem[]>
     {
         const _storeAssetsAndGetIds = (assets: ImmichAsset[], listUpdatedAt: string): string[] =>
         {
@@ -311,7 +311,7 @@ export class ImmichSessionCache
                 const assets = ttlCached.data
                     .map(id => this.assetInfoCache.get(id)?.data)
                     .filter((a): a is ImmichAsset => a !== undefined);
-                return buildFiles(assets);
+                return buildFiles(assets, settings);
             }
         }
 
@@ -365,7 +365,7 @@ export class ImmichSessionCache
         // Resolve IDs → assets from assetInfoCache, then build per-connection file nodes.
         const ids = await idPromise;
         const assets = ids.map(id => this.assetInfoCache.get(id)?.data).filter((a): a is ImmichAsset => a !== undefined);
-        return buildFiles(assets);
+        return buildFiles(assets, settings);
     }
     public async fetchCachedAlbumTree(cacheKey: string, { fetchMeta, fetchData }: ImmichTreeCacheFetchArgs): Promise<ImmichAlbumsDirectoryNode | undefined>
     {
