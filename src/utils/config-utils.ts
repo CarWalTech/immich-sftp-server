@@ -1,6 +1,7 @@
+import { logger } from "../logger";
 
 export type AssetFileNamePattern = 'original' | 'original+assetUuid' | 'original+shortUuid' | 'assetUuid' | 'shortUuid' | 'date' | 'dateUuid';
-export type AssetDownloadSource = 'original' | 'preview';
+export type AssetDownloadSource = 'original' | 'preview' | 'thumbnail';
 
 export function parseAssetDownloadSource(value: string | undefined): AssetDownloadSource | undefined
 {
@@ -67,6 +68,7 @@ export function parseAssetFileNamePattern(value: string | undefined): AssetFileN
     {
         throw new Error(`Invalid asset file name pattern: ${value}. Allowed: original, assetUuid, shortUuid, date, dateUuid, original+assetUuid, original+shortUuid.`);
     }
+    logger.info(`asset file name pattern: ${value} | ${parsed}`)
     return parsed;
 }
 

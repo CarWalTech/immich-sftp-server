@@ -162,7 +162,7 @@ export function getAlbumNormalizedName(segment: string, albumId: string): string
 {
     return PathUtils.normalizeFolderDisplayName(segment, 'album', albumId);
 }
-export function getVirtualAlbumTree(albums: ImmichAlbumDirectoryInfo[]): ImmichAlbumsDirectoryNode
+export function getVirtualAlbumTree(albums: ImmichAlbumDirectoryInfo[], seperator: string): ImmichAlbumsDirectoryNode
 {
     const root: ImmichAlbumsDirectoryNode = {
         rawName: '',
@@ -174,7 +174,7 @@ export function getVirtualAlbumTree(albums: ImmichAlbumDirectoryInfo[]): ImmichA
     for (const album of albums)
     {
         // Use the REAL album name for structure
-        const rawSegments = album.albumName.split(ImmichAlbumFolder.SEPERATOR).map(s => s.trim()).filter(Boolean);
+        const rawSegments = album.albumName.split(seperator).map(s => s.trim()).filter(Boolean);
 
         let node = root;
 

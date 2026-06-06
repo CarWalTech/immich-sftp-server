@@ -55,6 +55,7 @@ export class ImmichRootMetadataFile extends VirtualFile
         const content = fs.readFileSync(contents.name, 'utf8');
         const metadata = UserConfigLoader.load_user_from_yaml(content)
         UserConfigLoader.save_user(this.file_system.getCurrentUser()?.id, metadata)
+        this.file_system.getApi().CACHE_InvalidateUserConfig();
         contents.removeCallback();
         this.root_folder.refresh()
         return true;

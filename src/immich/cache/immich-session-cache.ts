@@ -512,14 +512,16 @@ export class ImmichSessionCache
             if (buf.isTmp) buf.removeCallback();
 
         this.assetListCache.clear();
-        // assetInfoCache and assetUpdatedAtHints are intentionally preserved:
-        // per-asset metadata survives full invalidations and persists across restarts.
         this.assetFileBuffers.clear();
         this.assetFileSizeCache.clear();
+        this.assetInfoCache.clear();
+
         this.albumsRawListCache = null;
         this.albumsRawListCachedAt = 0;
         this.albumsPathCache.clear()
         this.albumsTreeCache.clear()
+
+        this.xmpCache.clear();
     }
 
 }

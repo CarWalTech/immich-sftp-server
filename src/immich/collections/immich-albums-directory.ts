@@ -6,7 +6,7 @@ import { PathUtils } from "../../utils/path-utils";
 import { ImmichFileSystem } from "../immich-file-system";
 import { ImmichRootDirectory } from "./immich-root-directory";
 import { ImmichAlbumFolder } from "./immich-album-folder";
-import { getVirtualAlbumTree, ImmichAlbumDirectoryInfo } from '../utils/immich-api-utils';
+import { ImmichAlbumDirectoryInfo } from '../utils/immich-api-utils';
 import { ImmichAlbumsDirectoryNode } from "../utils/immich-api-utils";
 import { ImmichVirtualDirectory } from "./immich-virtual-directory";
 import { DateUtils } from "../../utils/date-utils";

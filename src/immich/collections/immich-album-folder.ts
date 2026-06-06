@@ -20,9 +20,6 @@ import { ImmichVirtualAssetSidecar } from "./immich-virtual-asset-sidecar";
 
 export class ImmichAlbumFolder extends ImmichVirtualDirectory 
 {
-
-    public static SEPERATOR = config.immichUserDefaults.subAlbumSeperator
-
     readonly albums_root: ImmichAlbumsDirectory;
     private node_data: ImmichAlbumsDirectoryNode;
 
@@ -41,10 +38,14 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
     {
         return this.node_data.rawName;
     }
+    public get_album_seperator()
+    {
+        return this.file_system.getApi().getUserSettings().subAlbumSeperator;
+    }
     public get_album_fullname()
     {
         const segments = this.get_album_path();
-        return segments.join(ImmichAlbumFolder.SEPERATOR);
+        return segments.join(this.get_album_seperator());
     }
     public get_album_path(): string[]
     {
@@ -73,7 +74,7 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
 
     async event_rename(new_name: string): Promise<boolean>
     {
-        const separator = ImmichAlbumFolder.SEPERATOR;
+        const separator = this.get_album_seperator();
 
         // 1. Compute the old path segments for THIS album
         const oldSegments = this.get_album_path();
@@ -131,7 +132,7 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
     {
         const segments = this.get_album_path();
         segments.push(folderName)
-        const albumName = segments.join(ImmichAlbumFolder.SEPERATOR);
+        const albumName = segments.join(this.get_album_seperator());
         await this.file_system.getApi().SERVER_CreateAlbum(albumName)
         this.refresh()
         return true

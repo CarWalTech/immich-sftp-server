@@ -417,7 +417,7 @@ export class ImmichAPI
 
         return await this.cache.fetchCachedAlbumTree(`ROOT`, {
             fetchMeta: async () => { const albums = await getAlbums(); return { updatedAt: getAlbumsFingerprint(albums) }; },
-            fetchData: async () => { const albums = await getAlbums(); return getVirtualAlbumTree(albums); }
+            fetchData: async () => { const albums = await getAlbums(); return getVirtualAlbumTree(albums, this.userSettings.subAlbumSeperator); }
         });
     }
     public async FETCH_AlbumVirtualBranch(path_id: string)
@@ -430,7 +430,7 @@ export class ImmichAPI
             fetchData: async () =>
             {
                 const albums = await getAlbums();
-                const tree = getVirtualAlbumTree(albums);
+                const tree = getVirtualAlbumTree(albums, this.userSettings.subAlbumSeperator);
                 return findAlbumNode(tree, n => n.path_id === path_id) ?? undefined;
             }
         });
@@ -1150,6 +1150,12 @@ export class ImmichAPI
     // #endregion
 
     // #region Cache Functions
+
+    public CACHE_InvalidateUserConfig()
+    {
+        this.userSettings = UserConfigLoader.load_user_or_default();
+        this.cache.invalidateAll();
+    }
 
     public CACHE_InvalidateTree()
     {
