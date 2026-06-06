@@ -7,8 +7,8 @@ import { createWriteStream } from 'fs';
 import isValidFilename from 'valid-filename';
 import FormData from 'form-data';
 
-import { ImmichAlbumDirectoryInfo, ImmichTagDirectoryInfo, ImmichTag, mapTagFromApi, applyAlbumDetails, extractCurrentUser, findAlbumNode, getVirtualAlbumTree, ImmichAlbumApiResponse, ImmichUser, mapAlbumFromApi, mapAssetFromApi, getAssetMtime, mapFilesFromAssets } from "./utils/immich-api-utils";
-import { config, UserConfigLoader, UserConfig } from "../config";
+import { ImmichAlbumDirectoryInfo, ImmichTagDirectoryInfo, ImmichTag, mapTagFromApi, applyAlbumDetails, extractCurrentUser, findAlbumNode, getVirtualAlbumTree, ImmichAlbumApiResponse, ImmichUser, mapAlbumFromApi, mapAssetFromApi, getAssetMtime, mapFilesFromAssets, getAlbumsFingerprint } from "./utils/immich-api-utils";
+import { config, UserConfigLoader, UserConfig, SHARED_BUFFER_CACHE_CAP } from "../config";
 import { PathUtils } from "../utils/path-utils";
 import { AlbumMetadataDocumentUtils } from "./utils/immich-metadata-utils";
 import { StringUtils2 } from "../utils/string-utils";
@@ -19,50 +19,12 @@ import { ImmichAsset } from "./utils/immich-api-utils";
 import { isObjectWithId } from "../utils/common-utils";
 import { logger } from '../logger';
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
-import { VirtualContentBufferUtils } from "../filesystem/virtual-content-buffer";
-import { ImmichCachedEntry, ImmichSessionCache } from './cache/immich-session-cache';
-import { ImmichVirtualAssetFile } from './collections/immich-virtual-asset-file';
-import { ImmichAlbumFolder } from './collections/immich-album-folder';
+import { ImmichSessionCache } from './cache/immich-session-cache';
 import { ImmichVirtualAssetItem, ImmichVirtualDirectory } from './collections/immich-virtual-directory';
 import { DateUtils } from '../utils/date-utils';
+import { DownloadSemaphore } from '../classes/download-semaphore';
 
-/**
- * Lightweight counting semaphore for concurrency control.
- */
-class DownloadSemaphore
-{
-    private readonly limit: number;
-    private running = 0;
-    private readonly queue: Array<() => void> = [];
 
-    constructor(limit: number) { this.limit = limit; }
-
-    private get hasFreeSpace()
-    {
-        if (this.limit == 0) return true;
-        return this.running < this.limit;
-    }
-
-    acquire(): Promise<void>
-    {
-        if (this.hasFreeSpace)
-        {
-            this.running++;
-            return Promise.resolve();
-        }
-        return new Promise<void>(resolve =>
-        {
-            this.queue.push(() => { this.running++; resolve(); });
-        });
-    }
-
-    release(): void
-    {
-        this.running--;
-        const next = this.queue.shift();
-        if (next) next();
-    }
-}
 
 export class ImmichAPI
 {
@@ -73,47 +35,10 @@ export class ImmichAPI
     private userSettings: UserConfig;
     private shouldLogoutSession = false;
     private readonly baseUrl;
-    // Shared across ALL connections — prevents N connections × M slots = N×M simultaneous downloads.
-    private static readonly downloadSemaphore = new DownloadSemaphore(config.maxConcurrentDLs);
-    // Global buffer cache for small assets. Buffer nodes are plain memory — safe to share across
-    // connections without ownership issues. Tmp-file nodes are NOT stored here (connection-local only).
-    // Map insertion order gives us a free LRU approximation: entries live at the "end";
-    // on access we delete + re-insert to promote them to MRU.  When the cap is reached
-    // the oldest (first) entry is evicted.
-    private static readonly sharedBufferCache = new Map<string, VirtualContentBuffer>();
-    private static readonly SHARED_BUFFER_CACHE_CAP = 1_000; // max in-memory asset buffers
-    // In-flight deduplication: at most one active download per asset across ALL connections.
-    // Registration is synchronous (no await between get-check and set), so this is race-free
-    // under Node.js's single-threaded event loop.
-    private static readonly downloadsInFlight = new Map<string, Promise<VirtualContentBuffer>>();
 
-    // LRU helpers for sharedBufferCache.
-    // Map iteration order == insertion order, so the oldest entry is always first().
-    // Promote an entry to MRU by deleting and re-inserting it.
-    private static sharedCacheGet(id: string): VirtualContentBuffer | undefined
-    {
-        const node = ImmichAPI.sharedBufferCache.get(id);
-        if (!node) return undefined;
-        // Promote to MRU position
-        ImmichAPI.sharedBufferCache.delete(id);
-        ImmichAPI.sharedBufferCache.set(id, node);
-        return node;
-    }
-    private static sharedCacheSet(id: string, node: VirtualContentBuffer): void
-    {
-        if (ImmichAPI.sharedBufferCache.has(id))
-        {
-            // Re-promote existing entry (size unchanged, just move to MRU)
-            ImmichAPI.sharedBufferCache.delete(id);
-        }
-        else if (ImmichAPI.sharedBufferCache.size >= ImmichAPI.SHARED_BUFFER_CACHE_CAP)
-        {
-            // Evict LRU (first entry in Map iteration order)
-            const oldest = ImmichAPI.sharedBufferCache.keys().next().value;
-            if (oldest !== undefined) ImmichAPI.sharedBufferCache.delete(oldest);
-        }
-        ImmichAPI.sharedBufferCache.set(id, node);
-    }
+    private static readonly sharedBufferCache = new Map<string, VirtualContentBuffer>();
+    private static readonly downloadSemaphore = new DownloadSemaphore(config.maxConcurrentDLs);
+    private static readonly downloadsInFlight = new Map<string, Promise<VirtualContentBuffer>>();
 
     constructor(immich_url: string)
     {
@@ -251,6 +176,10 @@ export class ImmichAPI
                 return [`${formattedTimestamp}`, extension];
             case 'dateUuid':
                 return [`${formattedTimestamp}_${shortId}`, extension];
+            case 'original+assetUuid':
+                return [`${originalFileName}_${asset.id}`, extension];
+            case 'original+shortUuid':
+                return [`${originalFileName}_${shortId}`, extension];
             case 'original':
             default:
                 return [originalFileName, extension];
@@ -487,7 +416,7 @@ export class ImmichAPI
         const getAlbums = async () => { if (!fetchedAlbums) fetchedAlbums = await this.FETCH_Albums(); return fetchedAlbums; };
 
         return await this.cache.fetchCachedAlbumTree(`ROOT`, {
-            fetchMeta: async () => { const albums = await getAlbums(); return { updatedAt: albums[0]?.updatedAt }; },
+            fetchMeta: async () => { const albums = await getAlbums(); return { updatedAt: getAlbumsFingerprint(albums) }; },
             fetchData: async () => { const albums = await getAlbums(); return getVirtualAlbumTree(albums); }
         });
     }
@@ -497,7 +426,7 @@ export class ImmichAPI
         const getAlbums = async () => { if (!fetchedAlbums) fetchedAlbums = await this.FETCH_Albums(); return fetchedAlbums; };
 
         return await this.cache.fetchCachedAlbumTree(`${path_id}`, {
-            fetchMeta: async () => { const albums = await getAlbums(); return { updatedAt: albums[0]?.updatedAt }; },
+            fetchMeta: async () => { const albums = await getAlbums(); return { updatedAt: getAlbumsFingerprint(albums) }; },
             fetchData: async () =>
             {
                 const albums = await getAlbums();
@@ -1017,12 +946,12 @@ export class ImmichAPI
             const data = await fs.promises.readFile(filepath);
             const buf = new VirtualContentBuffer(undefined, data);
             this.cache.assetFileBuffers.set(asset.id, buf);
-            ImmichAPI.sharedCacheSet(asset.id, buf);
+            ImmichAPI.CACHE_SetShared(asset.id, buf);
             return buf;
         }
 
         // 3. Global buffer cache — plain memory, safe to share across connections
-        const sharedCached = ImmichAPI.sharedCacheGet(asset.id);
+        const sharedCached = ImmichAPI.CACHE_GetShared(asset.id);
         if (sharedCached) return sharedCached;
 
         // 4. Determine endpoint
@@ -1067,7 +996,7 @@ export class ImmichAPI
         {
             // 8. Re-check shared cache inside the semaphore guard.
             //    A connection that had to wait for a slot may find the asset was already downloaded.
-            const cachedAfterWait = ImmichAPI.sharedCacheGet(asset.id);
+            const cachedAfterWait = ImmichAPI.CACHE_GetShared(asset.id);
             if (cachedAfterWait)
             {
                 resolveInflight(cachedAfterWait);
@@ -1123,7 +1052,7 @@ export class ImmichAPI
             //     at a deleted file.
             if (node.isBuffer)
             {
-                ImmichAPI.sharedCacheSet(asset.id, node);
+                ImmichAPI.CACHE_SetShared(asset.id, node);
                 this.cache.assetFileBuffers.set(asset.id, node);
             }
 
@@ -1230,6 +1159,35 @@ export class ImmichAPI
     public CACHE_InvalidateFilepath(path: string)
     {
         this.cache.invalidateAssetList(path)
+    }
+
+    private static CACHE_GetShared(id: string): VirtualContentBuffer | undefined
+    {
+        // LRU helpers for sharedBufferCache.
+        // Map iteration order == insertion order, so the oldest entry is always first().
+        // Promote an entry to MRU by deleting and re-inserting it.
+        const node = ImmichAPI.sharedBufferCache.get(id);
+        if (!node) return undefined;
+        // Promote to MRU position
+        ImmichAPI.sharedBufferCache.delete(id);
+        ImmichAPI.sharedBufferCache.set(id, node);
+        return node;
+    }
+
+    private static CACHE_SetShared(id: string, node: VirtualContentBuffer): void
+    {
+        if (ImmichAPI.sharedBufferCache.has(id))
+        {
+            // Re-promote existing entry (size unchanged, just move to MRU)
+            ImmichAPI.sharedBufferCache.delete(id);
+        }
+        else if (ImmichAPI.sharedBufferCache.size >= SHARED_BUFFER_CACHE_CAP)
+        {
+            // Evict LRU (first entry in Map iteration order)
+            const oldest = ImmichAPI.sharedBufferCache.keys().next().value;
+            if (oldest !== undefined) ImmichAPI.sharedBufferCache.delete(oldest);
+        }
+        ImmichAPI.sharedBufferCache.set(id, node);
     }
 
     // #endregion

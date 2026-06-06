@@ -6,7 +6,8 @@ import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
 import { DateUtils } from "../../utils/date-utils";
 import { logger } from "../../logger";
 import { ImmichVirtualAssetItem } from "../collections/immich-virtual-directory";
-import { AssetDownloadSource, config } from '../../config';
+import { config } from '../../config';
+import { AssetDownloadSource } from '../../utils/config-utils';
 import { ImmichAPI } from '../immich-api';
 import { buildAssetMetadataXMP } from '../utils/immich-metadata-utils';
 
