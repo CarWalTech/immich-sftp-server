@@ -158,7 +158,7 @@ export class ImmichAPI
 
     private get cache(): ImmichSessionCache
     {
-        return ImmichSessionCache.Instance(this.currentUser)
+        return ImmichSessionCache.Instance(this.currentUser, this.currentView)
     }
     public getUser()
     {

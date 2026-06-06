@@ -125,6 +125,7 @@ export class ImmichSessionCache
     private static _instances: Map<string, ImmichSessionCache> = new Map();
 
     private _userId: string | null = null;
+    private _viewId: string = "";
     private _saveTimer: ReturnType<typeof setTimeout> | null = null;
 
     constructor()
@@ -138,24 +139,27 @@ export class ImmichSessionCache
         this.albumsTreeCache = new Map()
     }
 
-    public static Instance(user: ImmichUser | null): ImmichSessionCache
+    public static Instance(user: ImmichUser | null, view: string | null): ImmichSessionCache
     {
         if (!user) return new ImmichSessionCache();
+        let view_str = view === null ? "" : view
+        let instance_id = `${user.id}${view_str}`;
 
-        let instance = this._instances.get(user.id);
+        let instance = this._instances.get(instance_id);
         if (!instance)
         {
             instance = new ImmichSessionCache();
             instance._userId = user.id;
+            instance._viewId = view_str
             instance.load();
-            this._instances.set(user.id, instance);
+            this._instances.set(instance_id, instance);
         }
         return instance;
     }
 
     private filepath(): string
     {
-        return path.join(ASSET_CACHE_DIR, `${this._userId}-assets.json`);
+        return path.join(ASSET_CACHE_DIR, `${this._userId}${this._viewId}-assets.json`);
     }
     private load(): void
     {
