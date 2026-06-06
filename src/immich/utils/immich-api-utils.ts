@@ -292,6 +292,14 @@ export function getAssetMtime(asset: ImmichAsset): number
     logger.warn('ImmichAssetUtils', 'getAssetMtime', `Asset '${asset.originalFileName}' (ID: ${asset.id}) has missing/invalid timestamps, using current time fallback.`);
     return DateUtils.getTimestampNow();
 }
+export function getAlbumsFingerprint(albums: ImmichAlbumDirectoryInfo[]): string
+{
+    const maxUpdatedAt = albums.reduce(
+        (max, a) => (!a.updatedAt || a.updatedAt < max ? max : a.updatedAt),
+        ''
+    );
+    return `${albums.length}:${maxUpdatedAt}`;
+}
 
 // Mapping
 export function mapAlbumUsers(rawAlbumUsers: unknown): ImmichAlbumUser[]

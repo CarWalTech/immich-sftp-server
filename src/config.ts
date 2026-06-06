@@ -4,58 +4,10 @@ import YAML from 'yaml';
 import { getEnvBoolean, getEnvByteSize, getOptionalEnvNumberRange, getEnvNumber, getEnvOrDefault, getOptionalEnv, getOptionalEnvNumber, requireEnv, NumberRange } from './utils/env-utils';
 import { logger } from './logger';
 import { getOptionalNestedString } from './utils/yaml-utils';
+import { AssetDownloadSource, AssetFileNamePattern, parseAssetDownloadSource, parseAssetFileNamePattern } from './utils/config-utils';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export type AssetFileNamePattern = 'original' | 'assetUuid' | 'shortUuid' | 'date' | 'dateUuid';
-function parseAssetFileNamePattern(value: string | undefined): AssetFileNamePattern | undefined
-{
-  if (!value)
-  {
-    return undefined;
-  }
-
-  const normalized = value.trim().toLowerCase();
-  const byValue: Record<string, AssetFileNamePattern> = {
-    original: 'original',
-    asset_uuid: 'assetUuid',
-    assetuuid: 'assetUuid',
-    uuid: 'assetUuid',
-    short_uuid: 'shortUuid',
-    shortuuid: 'shortUuid',
-    date: 'date',
-    date_uuid: 'dateUuid',
-    dateuuid: 'dateUuid',
-  };
-  const parsed = byValue[normalized];
-  if (!parsed)
-  {
-    throw new Error(`Invalid asset file name pattern: ${value}. Allowed: original, assetUuid, shortUuid, date, dateUuid.`);
-  }
-  return parsed;
-}
-
-export type AssetDownloadSource = 'original' | 'preview';
-function parseAssetDownloadSource(value: string | undefined): AssetDownloadSource | undefined
-{
-  if (!value)
-  {
-    return undefined;
-  }
-
-  const normalized = value.trim().toLowerCase();
-  const byValue: Record<string, AssetDownloadSource> = {
-    original: 'original',
-    preview: 'preview',
-    thumbnail: 'preview',
-  };
-  const parsed = byValue[normalized];
-  if (!parsed)
-  {
-    throw new Error(`Invalid asset download source: ${value}. Allowed: original, preview.`);
-  }
-  return parsed;
-}
+export const SHARED_BUFFER_CACHE_CAP = 1000;
 
 export class Config
 {
