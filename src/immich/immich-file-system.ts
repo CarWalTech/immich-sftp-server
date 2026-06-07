@@ -33,13 +33,16 @@ export class ImmichFileSystem implements VirtualFileSystem
     // VirtualFileSystem Methods
     async login(username: string, password: string): Promise<void>
     {
+        logger.filesystem("ImmichFileSystem", "LOGIN", `Login starting for user: ${username}`)
         return await this.immichApi.login(username, password)
     }
 
     async logout(): Promise<void>
     {
+        logger.filesystem("ImmichFileSystem", "LOGOUT", `Logout starting for user: ${this.immichApi.getUser()?.id ?? 'unknown'}`)
         await this.immichApi.logout();
         await this.root.event_logout();
+        logger.filesystem("ImmichFileSystem", "LOGOUT", `Logout complete for user: ${this.immichApi.getUser()?.id ?? 'unknown'}`)
     }
     async setAttributes(_filename: string, _mtime: number)
     {
@@ -52,6 +55,7 @@ export class ImmichFileSystem implements VirtualFileSystem
         const { node } = await VirtualFsUtils.resolvePath(this.root, currentDir);
         if (!node || !node.isDir()) throw new Error(`Not a directory: ${currentDir}`);
 
+        logger.filesystem("ImmichFileSystem", "LIST", `Listing files: ${currentDir}`)
         const result = await (node as VirtualDirectory).event_list()
         if (result) return result
         else throw new Error("Unable to process event list")
@@ -64,24 +68,28 @@ export class ImmichFileSystem implements VirtualFileSystem
         const { node } = await VirtualFsUtils.resolvePath(this.root, filename);
         if (!node || node.isDir()) throw new Error(`Not a file: ${filename}`);
 
+        logger.filesystem("ImmichFileSystem", "READ", `Reading file: ${filename}`)
+
         const file = (node as VirtualFile);
         return await file.event_readfile();
     }
     async writeFile(filename: string, tmpFile: VirtualContentBuffer)
     {
         const is_tmp = await this.memory.write(filename, tmpFile)
-        if (is_tmp) return;
+        if (is_tmp) return
 
         const { parent, node, name } = await VirtualFsUtils.resolvePath(this.root, filename);
 
         if (node && !node.isDir())
         {
+            logger.filesystem("ImmichFileSystem", "WRITE", `Writing file: ${filename}`)
             await (node as VirtualFile).event_writefile(tmpFile);
             return;
         }
 
         if (parent && parent.isDir())
         {
+            logger.filesystem("ImmichFileSystem", "WRITE", `Writing to new file: ${filename}`)
             await parent.event_createfile(name, tmpFile);
             await this.memory.flushQueued(filename);
             return;
@@ -96,6 +104,8 @@ export class ImmichFileSystem implements VirtualFileSystem
 
         const { node } = await VirtualFsUtils.resolvePath(this.root, filename);
         if (!node) return { success: false, contents: undefined }
+
+        logger.filesystem("ImmichFileSystem", "STAT", `Getting stats of: ${filename}`)
 
         const node_result = await node.event_stat();
         return { success: true, contents: node_result }
@@ -124,6 +134,7 @@ export class ImmichFileSystem implements VirtualFileSystem
         }
         else if (oldRes.name == newRes.name && oldRes.parent.fullpath != newRes.parent.fullpath)
         {
+            logger.filesystem("ImmichFileSystem", "RENAME", `Renaming folder: ${oldFileName} -> ${newFileName}`)
             // Asset move: event handlers invalidate only what they touch.
             // Directory move: full tree invalidation needed since album structure changes.
             if (oldRes.node.isDir()) this.invalidateTree();
@@ -131,6 +142,7 @@ export class ImmichFileSystem implements VirtualFileSystem
         }
         else
         {
+            logger.filesystem("ImmichFileSystem", "RENAME", `Renaming file: ${oldFileName} -> ${newFileName}`)
             this.invalidateTree();
             return await oldRes.node.event_rename(newRes.name)
         }
@@ -145,6 +157,7 @@ export class ImmichFileSystem implements VirtualFileSystem
             return await this.memory.remove(filename);
         }
 
+        logger.filesystem("ImmichFileSystem", "REMOVE", `Deleting: ${filename}`)
         return await node.event_delete();
     }
     async mkdir(path: string)
@@ -153,6 +166,8 @@ export class ImmichFileSystem implements VirtualFileSystem
 
         if (node) return false;
         if (!parent) return false;
+
+        logger.filesystem("ImmichFileSystem", "MKDIR", `Creating directory: ${path}`)
 
         const result = await parent.event_mkdir(name);
         return result;
@@ -300,6 +315,7 @@ export class ImmichFileSystemMemory
 
         if (found.type === "tmp")
         {
+            logger.filesystem("ImmichFileSystemMemory", "READ", `Reading memory file: ${filename}`)
             const entry = found.item as ImmichFileSystemMemoryEntry;
             // Return the existing tmp file directly
             return entry.tmpFile;
@@ -315,6 +331,7 @@ export class ImmichFileSystemMemory
         // 1) If this is a .part file → keep it in memory only
         if (normalized.endsWith(".part"))
         {
+            logger.filesystem("ImmichFileSystemMemory", "WRITE", `Writing memory file: ${filename}`)
             const dir = path.posix.dirname(normalized);
             const base = path.posix.basename(normalized);
 
@@ -332,6 +349,8 @@ export class ImmichFileSystemMemory
         filename = PathUtils.normalizePath(filename);
         const entry = this.find(filename);
         if (!entry) return null;
+
+        logger.filesystem("ImmichFileSystemMemory", "STAT", `Getting stats of: ${filename}`)
 
         // Upload is now triggered directly by writeFile → flushQueued.
         // stat() just confirms the file is known so the client gets a sensible response.

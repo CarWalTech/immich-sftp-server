@@ -272,11 +272,26 @@ export function generateAlbumMetadataUserDocument(album: AlbumVirtualFileAlbum, 
         sharedUsers: album.albumUsers,
     }, isCurrentUserAlbumOwner(album, currentUser), baseUrl);
 }
+// Tag-related sidecar fields that Immich always owns — stripped before applying Immich data.
+// Sidecar tags that are leaf-name equivalents of existing Immich tags are already covered
+// by the Immich tag values written below; no manual "resemble" matching is required.
+const SIDECAR_TAG_FIELDS = [
+    'dc:subject', 'lr:hierarchicalSubject',
+    'digiKam:TagsList',
+    'MicrosoftPhoto:LastKeywordXMP',
+    'acdsee:categories',
+    'mediapro:CatalogSets',
+    // Namespace declarations for the tag-only schemas (safe to drop when their fields are gone)
+    '@_xmlns:digiKam',
+    '@_xmlns:MicrosoftPhoto',
+    '@_xmlns:acdsee',
+    '@_xmlns:mediapro',
+];
+
 export function generateAssetMetadataDocument(asset: ImmichAsset, existingSidecar: string | null): string
 {
     const exif = asset.exifInfo ?? {};
 
-    // Immich data — Immich wins over sidecar for shared fields
     const immichDescription = typeof exif.description === 'string' ? exif.description : '';
     const immichCreateDate = exif.dateTimeOriginal ?? asset.fileCreatedAt ?? '';
     const lat = typeof exif.latitude === 'number' ? exif.latitude : undefined;
@@ -290,58 +305,44 @@ export function generateAssetMetadataDocument(asset: ImmichAsset, existingSideca
     const immichTags: string[] = Array.isArray(asset.tags)
         ? asset.tags.filter(t => t?.value).map(t => String(t.value))
         : [];
-
     const immichPeople: string[] = Array.isArray(asset.people)
         ? asset.people.filter(p => p?.name).map(p => String(p.name))
         : [];
 
-    // Merge: start with Immich data, sidecar fills missing fields
-    let description = immichDescription;
-    let subjects = [...immichTags];
-    let hierarchical = XMPUtils.buildHierarchical(immichTags);
-    let rating: string | undefined;
-
+    // ── Base: start with all existing sidecar fields so non-Immich data is preserved ──
+    // (rating, orientation, resolution, lens info, rights, IPTC, etc. all survive unchanged)
+    let descNode: Record<string, any> = { '@_rdf:about': '' };
     if (existingSidecar)
     {
-        const desc = XMPUtils.getDescNode(XMPUtils.parseSidecar(existingSidecar));
-
-        if (!description)
-            description = XMPUtils.extractAltText(desc, 'dc:description') ?? '';
-
-        if (subjects.length === 0)
-        {
-            subjects = XMPUtils.extractListValues(desc, 'dc:subject');
-            hierarchical = XMPUtils.extractListValues(desc, 'lr:hierarchicalSubject');
-        }
-
-        rating = XMPUtils.extractSimpleValue(desc, 'xmp:Rating');
+        const sidecarDesc = XMPUtils.getDescNode(XMPUtils.parseSidecar(existingSidecar));
+        Object.assign(descNode, sidecarDesc);
+        descNode['@_rdf:about'] = '';
     }
 
-    for (const name of immichPeople)
-        if (!subjects.includes(name)) subjects.push(name);
+    // ── Strip all sidecar tag fields — Immich is always authoritative, even when empty ──
+    for (const field of SIDECAR_TAG_FIELDS) delete descNode[field];
 
-    // Build the rdf:Description node
+    // ── Ensure required namespace declarations are present ────────────────────
     const hasGPS = lat !== undefined && lon !== undefined;
     const hasCamera = !!(make || model);
     const hasLocation = !!(city || state || country);
 
-    const descNode: Record<string, any> = {
-        '@_rdf:about': '',
-        '@_xmlns:dc': 'http://purl.org/dc/elements/1.1/',
-        '@_xmlns:xmp': 'http://ns.adobe.com/xap/1.0/',
-        '@_xmlns:lr': 'http://ns.adobe.com/lightroom/1.0/',
-    };
-
+    descNode['@_xmlns:dc'] = 'http://purl.org/dc/elements/1.1/';
+    descNode['@_xmlns:xmp'] = 'http://ns.adobe.com/xap/1.0/';
+    descNode['@_xmlns:lr'] = 'http://ns.adobe.com/lightroom/1.0/';
     if (hasGPS) descNode['@_xmlns:exif'] = 'http://ns.adobe.com/exif/1.0/';
     if (hasCamera) descNode['@_xmlns:tiff'] = 'http://ns.adobe.com/tiff/1.0/';
     if (hasLocation) descNode['@_xmlns:photoshop'] = 'http://ns.adobe.com/photoshop/1.0/';
 
-    if (description)
+    // ── Apply Immich-managed scalar fields ────────────────────────────────────
+    // Immich wins when it has data; when it doesn't, the sidecar value from the
+    // merge above acts as the fallback (except for tags, which have no fallback).
+
+    if (immichDescription)
         descNode['dc:description'] = {
-            'rdf:Alt': { 'rdf:li': [{ '@_xml:lang': 'x-default', '#text': description }] }
+            'rdf:Alt': { 'rdf:li': [{ '@_xml:lang': 'x-default', '#text': immichDescription }] }
         };
 
-    if (rating !== undefined) descNode['xmp:Rating'] = rating;
     if (immichCreateDate) descNode['xmp:CreateDate'] = immichCreateDate;
 
     if (make) descNode['tiff:Make'] = make;
@@ -357,12 +358,23 @@ export function generateAssetMetadataDocument(asset: ImmichAsset, existingSideca
     if (state) descNode['photoshop:State'] = state;
     if (country) descNode['photoshop:Country'] = country;
 
+    // ── Apply Immich tag fields (always authoritative, even when empty) ────────
+    // dc:subject: leaf-only paths (ancestor tags Immich stores separately are dropped)
+    const immichLeafTags = immichTags.filter(
+        tag => !immichTags.some(other => other !== tag && other.startsWith(tag + '/'))
+    );
+    const subjects = [...immichLeafTags];
+    for (const name of immichPeople)
+        if (!subjects.includes(name)) subjects.push(name);
+
+    const hierarchical = XMPUtils.buildHierarchical(immichTags);
+
     if (subjects.length > 0)
         descNode['dc:subject'] = { 'rdf:Bag': { 'rdf:li': subjects } };
-
     if (hierarchical.length > 0)
         descNode['lr:hierarchicalSubject'] = { 'rdf:Bag': { 'rdf:li': hierarchical } };
 
+    // ── Build XML ─────────────────────────────────────────────────────────────
     const doc = {
         'x:xmpmeta': {
             '@_xmlns:x': 'adobe:ns:meta/',

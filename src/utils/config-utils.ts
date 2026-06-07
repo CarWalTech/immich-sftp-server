@@ -1,4 +1,3 @@
-import { logger } from "../logger";
 
 export type AssetFileNamePattern = 'original' | 'original+assetUuid' | 'original+shortUuid' | 'assetUuid' | 'shortUuid' | 'date' | 'dateUuid';
 export type AssetDownloadSource = 'original' | 'preview' | 'thumbnail';
@@ -70,5 +69,11 @@ export function parseAssetFileNamePattern(value: string | undefined): AssetFileN
     }
     return parsed;
 }
+
+export function getBoolOrDefault(value: boolean | undefined, fallback: boolean)
+{
+    return value === undefined ? fallback : value;
+}
+
 
 

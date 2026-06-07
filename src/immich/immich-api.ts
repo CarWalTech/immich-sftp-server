@@ -220,7 +220,7 @@ export class ImmichAPI
         {
             try
             {
-                logger.explicit(`ImmichAPI`, `${logAction}`, `Sending: ${method} /api/${endpoint}`);
+                logger.api(`ImmichAPI`, `${logAction}`, `Sending: ${method} /api/${endpoint}`);
 
                 const response = await axios.request({
                     method: method,
@@ -243,9 +243,9 @@ export class ImmichAPI
                 });
 
                 if (skipResponseLog == true)
-                    logger.explicit(`ImmichAPI`, `${logAction}`, `Received (${logAction}):`, response.status, '[Data skipped]');
+                    logger.api(`ImmichAPI`, `${logAction}`, `Received (${logAction}):`, response.status, '[Data skipped]');
                 else
-                    logger.explicit(`ImmichAPI`, `${logAction}`, `Received:`, response.status, this.filterLogData(response.data));
+                    logger.api(`ImmichAPI`, `${logAction}`, `Received:`, response.status, this.filterLogData(response.data));
                 return response.data;
             }
             catch (err)

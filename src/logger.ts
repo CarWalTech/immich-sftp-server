@@ -122,12 +122,28 @@ export class CustomLogger<LogObj> extends BaseLogger<LogObj>
         args = this.format_args(args)
         return super.log(5, "ERROR", ...args);
     }
+    public api(...args: unknown[]): LogObj & ILogObjMeta | undefined
+    {
+        if (config.LOGS_API == false) return;
+        if (this.is_ignored(args)) return;
+        args = this.format_args(args)
+        return super.log(6, "API", ...args)
+    }
+
     public explicit(...args: unknown[]): LogObj & ILogObjMeta | undefined
     {
         if (config.LOGS_EXPLICIT == false) return;
         if (this.is_ignored(args)) return;
         args = this.format_args(args)
-        return super.log(6, "EXPLICIT", ...args)
+        return super.log(7, "EXPLICIT", ...args)
+    }
+
+    public filesystem(...args: unknown[]): LogObj & ILogObjMeta | undefined
+    {
+        if (config.LOGS_FILESYSTEM == false) return;
+        if (this.is_ignored(args)) return;
+        args = this.format_args(args)
+        return super.log(8, "FILESYSTEM", ...args)
     }
 }
 
@@ -150,7 +166,9 @@ export const logger = new CustomLogger({
             WARN: ["bold", "yellow"],
             ERROR: ["bold", "red"],
             FATAL: ["bold", "redBright"],
+            API: ["bold", "black", "bgYellow"],
             EXPLICIT: ["bold", "black", "bgGreen"],
+            FILESYSTEM: ["bold", "magenta"],
         },
         fileName: ["yellow"],
         dateIsoStr: "white",

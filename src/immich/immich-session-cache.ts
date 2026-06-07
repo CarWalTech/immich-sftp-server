@@ -338,7 +338,7 @@ export class ImmichSessionCache
 
                     // Cache hit: timestamps match — stamp the TTL so the next
                     // VALIDATION_TTL_MS of requests skip this round-trip.
-                    logger.explicit("ImmichSessionCache", "ASSETS", `Cache Check Meta: new=${freshMeta?.updatedAt} old=${cached?.updatedAt}`)
+                    logger.debug("ImmichSessionCache", "ASSETS", `Cache Check Meta: new=${freshMeta?.updatedAt} old=${cached?.updatedAt}`)
                     if (cached && freshMeta?.updatedAt && freshMeta.updatedAt === cached.updatedAt)
                     {
                         cached.lastValidatedAt = Date.now();

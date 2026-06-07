@@ -4,7 +4,7 @@ export class XMPUtils
     static readonly PARSER_OPTIONS = {
         ignoreAttributes: false,
         attributeNamePrefix: '@_',
-        isArray: (name: string) => name === 'rdf:li',
+        isArray: (name: string) => name === 'rdf:li' || name === 'rdf:Description',
         parseAttributeValue: false,
         parseTagValue: false,
         trimValues: true,
@@ -32,7 +32,21 @@ export class XMPUtils
 
     static getDescNode(parsed: Record<string, any>): Record<string, any>
     {
-        return parsed?.['x:xmpmeta']?.['rdf:RDF']?.['rdf:Description'] ?? {};
+        const raw = parsed?.['x:xmpmeta']?.['rdf:RDF']?.['rdf:Description'];
+        if (!raw) return {};
+        if (Array.isArray(raw))
+        {
+            // Multi-block XMP (e.g. DigiKam writes one rdf:Description per namespace).
+            // Merge all blocks into one flat object; later blocks win on key conflicts.
+            return raw.reduce(
+                (merged: Record<string, any>, block: unknown) =>
+                    block !== null && typeof block === 'object'
+                        ? { ...merged, ...(block as Record<string, any>) }
+                        : merged,
+                {}
+            );
+        }
+        return typeof raw === 'object' ? raw : {};
     }
 
     static extractAltText(desc: Record<string, any>, prop: string): string | undefined
@@ -108,13 +122,22 @@ export class XMPUtils
 
     static buildHierarchical(tags: string[]): string[]
     {
+        // Normalize any | separators to / for internal processing
+        const normalized = tags.map(t => t.replace(/\|/g, '/'));
+
+        // Discard ancestor paths that Immich stored as separate tags — keep only leaves
+        const leaves = normalized.filter(
+            tag => !normalized.some(other => other !== tag && other.startsWith(tag + '/'))
+        );
+
+        // Expand each leaf to all ancestor paths; use | as separator (lr:hierarchicalSubject standard)
         const result: string[] = [];
-        for (const tag of tags)
+        for (const leaf of leaves)
         {
-            const parts = tag.split('/');
+            const parts = leaf.split('/');
             for (let i = 1; i <= parts.length; i++)
             {
-                const segment = parts.slice(0, i).join('/');
+                const segment = parts.slice(0, i).join('|');
                 if (!result.includes(segment)) result.push(segment);
             }
         }

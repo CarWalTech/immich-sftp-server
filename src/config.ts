@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { logger } from './logger';
-import { AssetDownloadSource, AssetFileNamePattern, parseAssetDownloadSource, parseAssetFileNamePattern } from './utils/config-utils';
+import { AssetDownloadSource, AssetFileNamePattern, getBoolOrDefault, parseAssetDownloadSource, parseAssetFileNamePattern } from './utils/config-utils';
 import { getEnvBoolean, getEnvByteSize, getEnvNumber, getEnvOrDefault, getOptionalEnv, requireEnv } from './utils/env-utils';
 import { getOptionalNestedBoolean, getOptionalNestedString } from './utils/yaml-utils';
 
@@ -19,7 +19,9 @@ export class Config
   LOGS_INFO: boolean;
   LOGS_WARN: boolean;
   LOGS_ERROR: boolean;
+  LOGS_API: boolean;
   LOGS_EXPLICIT: boolean;
+  LOGS_FILESYSTEM: boolean;
 
   // server protocols
   PROTOCOL_HOST: string
@@ -58,7 +60,9 @@ export class Config
     this.LOGS_INFO = getEnvBoolean('SERVER_LOGS_INFO', true)
     this.LOGS_WARN = getEnvBoolean('SERVER_LOGS_WARN', true)
     this.LOGS_ERROR = getEnvBoolean('SERVER_LOGS_ERROR', true)
-    this.LOGS_EXPLICIT = getEnvBoolean('SERVER_LOGS_EXPLICIT', false)
+    this.LOGS_API = getEnvBoolean('SERVER_LOGS_API', false)
+    this.LOGS_EXPLICIT = getEnvBoolean('SERVER_LOGS_EXPLICIT', true)
+    this.LOGS_FILESYSTEM = getEnvBoolean('SERVER_LOGS_FILESYSTEM', false)
 
     // server protocol
     this.PROTOCOL_HOST = getEnvOrDefault('SERVER_PROTOCOL_HOST', '0.0.0.0');
@@ -111,11 +115,11 @@ export class UserConfigLoader
   {
     return this.read_user_json(user_id, view_id)
   }
-  public static load_user_json(user_id: string | undefined, view_id: string | null = null): string
+  public static load_user_json(user_id: string | undefined, view_id: string | null): string
   {
     try
     {
-      const result = this.load_user(user_id)
+      const result = this.load_user(user_id, view_id)
       return JSON.stringify(result, null, 2)
     }
     catch
@@ -133,16 +137,16 @@ export class UserConfigLoader
     const envEnableAlbumLinks = getOptionalNestedBoolean(json, ['enableAlbumLinks'])
     const envEnableAlbumMetadata = getOptionalNestedBoolean(json, ['enableAlbumMetadata'])
     const envEnableTrashLink = getOptionalNestedBoolean(json, ['enableTrashLink'])
-    const envDigikamTrashCompat = getOptionalNestedBoolean(json, ['envDigikamTrashCompat'])
+    const envDigikamTrashCompat = getOptionalNestedBoolean(json, ['digikamTrashCompat'])
     return {
       subAlbumSeperator: envSubAlbumSeperator ?? this.DEFAULTS.subAlbumSeperator,
       assetDownloadSource: envDownloadSource ?? this.DEFAULTS.assetDownloadSource,
       assetFileNamePattern: envFileNamePattern ?? this.DEFAULTS.assetFileNamePattern,
-      assetSidecarsEnabled: envEnableSidecarFiles ?? this.DEFAULTS.assetSidecarsEnabled,
-      enableAlbumLinks: envEnableAlbumLinks ?? config.USERDEFAULTS_ENABLE_ALBUM_LINKS,
-      enableAlbumMetadata: envEnableAlbumMetadata ?? config.USERDEFAULTS_ENABLE_ALBUM_METADATA,
-      enableTrashLink: envEnableTrashLink ?? config.USERDEFAULTS_ENABLE_TRASH_LINK,
-      digikamTrashCompat: envDigikamTrashCompat ?? config.USERDEFAULTS_DIGIKAM_TRASH_COMPAT
+      assetSidecarsEnabled: getBoolOrDefault(envEnableSidecarFiles, this.DEFAULTS.assetSidecarsEnabled),
+      enableAlbumLinks: getBoolOrDefault(envEnableAlbumLinks, this.DEFAULTS.enableAlbumLinks),
+      enableAlbumMetadata: getBoolOrDefault(envEnableAlbumMetadata, this.DEFAULTS.enableAlbumMetadata),
+      enableTrashLink: getBoolOrDefault(envEnableTrashLink, this.DEFAULTS.enableTrashLink),
+      digikamTrashCompat: getBoolOrDefault(envDigikamTrashCompat, this.DEFAULTS.digikamTrashCompat)
     }
   }
   public static load_defaults(): UserConfig
@@ -173,6 +177,8 @@ export class UserConfigLoader
   {
     const settingsFilePath = this.resolve_user_path(userId, view_id);
     if (!settingsFilePath) return this.DEFAULTS;
+
+    //logger.explicit("UserConfigLoader", "JSON", `Reading file from path: ${settingsFilePath}`)
 
     if (!fs.existsSync(settingsFilePath))
     {
