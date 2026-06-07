@@ -103,7 +103,9 @@ export class ImmichSessionCache
     // Stores album tree data per directory/path key
     albumsTreeCache: Map<string, ImmichCachedEntry<ImmichAlbumsDirectoryNode | undefined>>;
     // Stores rendered XMP sidecar strings keyed by asset ID, valid while updatedAt matches.
+    // Capped with LRU eviction — XMP is cheap to re-generate from assetInfoCache.
     private xmpCache: Map<string, { xmp: string; updatedAt: string }> = new Map();
+    private static readonly XMP_CACHE_CAP = 2_000;
 
     // Raw album list cache — the result of GET /api/albums, shared across all
     // connections for the same user.  All FETCH_AlbumVirtualBranch calls derive
@@ -113,6 +115,7 @@ export class ImmichSessionCache
     private albumsRawListCache: ImmichAlbumDirectoryInfo[] | null = null;
     private albumsRawListCachedAt = 0;
     private inFlightAlbumsListFetch: Promise<ImmichAlbumDirectoryInfo[]> | null = null;
+    private _lastPrefetchAt = 0;
 
     // Deduplication maps: when multiple connections request the same directory
     // simultaneously (e.g. Dolphin thumbnail workers), they all share one in-flight
@@ -167,21 +170,70 @@ export class ImmichSessionCache
         {
             if (!fs.existsSync(filePath)) return;
             const raw = fs.readFileSync(filePath, 'utf8');
-            const parsed = JSON.parse(raw) as Record<string, ImmichCachedEntry<ImmichAsset>>;
-            let count = 0;
-            for (const [k, v] of Object.entries(parsed))
+            const parsed = JSON.parse(raw);
+
+            if (parsed && typeof parsed === 'object' && (parsed as any).v === 2)
             {
-                if (k && v?.data && v?.updatedAt)
+                // Versioned format: assets + album lists + albumPaths
+                const envelope = parsed as {
+                    v: number;
+                    assets: Record<string, ImmichCachedEntry<ImmichAsset>>;
+                    lists: Record<string, { data: string[]; updatedAt: string }>;
+                    albumPaths: Record<string, string>;
+                    fileSizes?: { preview?: Record<string, number>; original?: Record<string, number> };
+                };
+                let assetCount = 0;
+                for (const [k, v] of Object.entries(envelope.assets ?? {}))
                 {
-                    this.assetInfoCache.set(k, v);
-                    count++;
+                    if (k && v?.data && v?.updatedAt)
+                    {
+                        this.assetInfoCache.set(k, v);
+                        assetCount++;
+                    }
                 }
+                let listCount = 0;
+                for (const [k, v] of Object.entries(envelope.lists ?? {}))
+                {
+                    if (k && Array.isArray(v?.data) && v?.updatedAt)
+                    {
+                        // Omit lastValidatedAt on restore — always re-validate against API on first access after restart.
+                        this.assetListCache.set(k, { data: v.data, updatedAt: v.updatedAt });
+                        listCount++;
+                    }
+                }
+                for (const [k, v] of Object.entries(envelope.albumPaths ?? {}))
+                {
+                    if (k && typeof v === 'string') this.albumsPathCache.set(k, v);
+                }
+                for (const [k, v] of Object.entries(envelope.fileSizes?.preview ?? {}))
+                {
+                    if (k && typeof v === 'number') this.assetFileSizeCache.set(k, v, 'preview');
+                }
+                for (const [k, v] of Object.entries(envelope.fileSizes?.original ?? {}))
+                {
+                    if (k && typeof v === 'number') this.assetFileSizeCache.set(k, v, 'original');
+                }
+                logger.info('ImmichSessionCache', 'LOAD', `Restored ${assetCount} assets, ${listCount} album lists from disk`);
             }
-            logger.info('ImmichSessionCache', 'LOAD', `Restored ${count} asset entries from disk`);
+            else
+            {
+                // Legacy format: flat map of asset info entries only
+                const assetData = parsed as Record<string, ImmichCachedEntry<ImmichAsset>>;
+                let count = 0;
+                for (const [k, v] of Object.entries(assetData))
+                {
+                    if (k && v?.data && v?.updatedAt)
+                    {
+                        this.assetInfoCache.set(k, v);
+                        count++;
+                    }
+                }
+                logger.info('ImmichSessionCache', 'LOAD', `Restored ${count} asset entries from disk (legacy format)`);
+            }
         }
         catch (err)
         {
-            logger.warn('ImmichSessionCache', 'LOAD', `Failed to restore asset cache from disk: ${err}`);
+            logger.warn('ImmichSessionCache', 'LOAD', `Failed to restore cache from disk: ${err}`);
         }
     }
     private async save(): Promise<void>
@@ -191,14 +243,30 @@ export class ImmichSessionCache
         try
         {
             fs.mkdirSync(ASSET_CACHE_DIR, { recursive: true });
-            const data: Record<string, ImmichCachedEntry<ImmichAsset>> = Object.fromEntries(this.assetInfoCache);
+
+            // Strip lastValidatedAt from list entries — it's a session-only TTL gate
+            // that must always expire on first access after a restart.
+            const lists: Record<string, { data: string[]; updatedAt: string }> = {};
+            for (const [k, v] of this.assetListCache)
+                lists[k] = { data: v.data, updatedAt: v.updatedAt };
+
+            const envelope = {
+                v: 2,
+                assets: Object.fromEntries(this.assetInfoCache),
+                lists,
+                albumPaths: Object.fromEntries(this.albumsPathCache),
+                fileSizes: {
+                    preview: Object.fromEntries(this.assetFileSizeCache.preview),
+                    original: Object.fromEntries(this.assetFileSizeCache.original),
+                },
+            };
             // Use the async variant so the event loop is not blocked while writing
             // large cache files (can be several MB on a big library).
-            await fs.promises.writeFile(filePath, JSON.stringify(data), 'utf8');
+            await fs.promises.writeFile(filePath, JSON.stringify(envelope), 'utf8');
         }
         catch (err)
         {
-            logger.warn('ImmichSessionCache', 'SAVE', `Failed to persist asset cache to disk: ${err}`);
+            logger.warn('ImmichSessionCache', 'SAVE', `Failed to persist cache to disk: ${err}`);
         }
     }
     private scheduleSave(): void
@@ -463,6 +531,11 @@ export class ImmichSessionCache
             xmp = buildAssetMetadataXMP(actual_asset, null);
         }
 
+        if (this.xmpCache.size >= ImmichSessionCache.XMP_CACHE_CAP)
+        {
+            const oldest = this.xmpCache.keys().next().value;
+            if (oldest !== undefined) this.xmpCache.delete(oldest);
+        }
         this.xmpCache.set(assetId, { xmp, updatedAt });
         return xmp;
     }
@@ -492,13 +565,17 @@ export class ImmichSessionCache
     {
         for (const id of albumIds)
         {
+            this.assetListCache.delete(id);
             const path = this.albumsPathCache.get(id)
-            if (path)
-            {
-                this.albumsTreeCache.delete(path)
-                this.assetListCache.delete(path)
-            }
+            if (path) this.albumsTreeCache.delete(path)
         }
+    }
+    public tryMarkPrefetch(): boolean
+    {
+        const now = Date.now();
+        if (now - this._lastPrefetchAt < VALIDATION_TTL_MS) return false;
+        this._lastPrefetchAt = now;
+        return true;
     }
     public invalidateAssetList(fullpath: string)
     {

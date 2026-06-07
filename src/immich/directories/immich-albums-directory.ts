@@ -181,6 +181,7 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
 
         await this.file_system.memory.push(filename, this.fullpath, contents, album);
         this.file_system.invalidatePath(this.fullpath);
+        this.file_system.invalidatePath(album.id);
         super.refresh();
         return true;
     }
@@ -249,6 +250,7 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
             const album = (this.node_data.album as ImmichAlbumDirectoryInfo);
             await this.file_system.getApi().SERVER_DeleteAssetFromAlbumOnly(album, asset.asset_id);
             this.file_system.invalidatePath(this.fullpath);
+            this.file_system.invalidatePath(album.id);
             return true;
         }
 
@@ -266,6 +268,7 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
             {
                 const album = (this.node_data.album as ImmichAlbumDirectoryInfo);
                 await this.file_system.getApi().SERVER_AddAssetToAlbum(album.id, asset.asset_id);
+                this.file_system.invalidatePath(album.id);
             }
 
             else

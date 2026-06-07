@@ -3,6 +3,17 @@
 import { logger } from './logger';
 import type { TransferProtocolServer } from './protocols/transfer-protocol-server';
 
+process.on('unhandledRejection', (reason) =>
+{
+    logger.error('SERVER', 'CRASH', `Unhandled promise rejection — this is a bug: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`);
+});
+
+process.on('uncaughtException', (error) =>
+{
+    logger.error('SERVER', 'CRASH', `Uncaught exception — shutting down: ${error.stack ?? error.message}`);
+    process.exit(1);
+});
+
 async function startServers(): Promise<void>
 {
   const [{ config }, { SftpProtocolServer }, { WebdavProtocolServer }] = await Promise.all([

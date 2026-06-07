@@ -435,10 +435,60 @@ export class ImmichAPI
         let fetchedAlbums: ImmichAlbumDirectoryInfo[] | null = null;
         const getAlbums = async () => { if (!fetchedAlbums) fetchedAlbums = await this.FETCH_Albums(); return fetchedAlbums; };
 
-        return await this.cache.fetchCachedAlbumTree(`ROOT`, {
+        const result = await this.cache.fetchCachedAlbumTree(`ROOT`, {
             fetchMeta: async () => { const albums = await getAlbums(); return { updatedAt: getAlbumsFingerprint(albums) }; },
             fetchData: async () => { const albums = await getAlbums(); return getVirtualAlbumTree(albums, this.userSettings.subAlbumSeperator); }
         });
+
+        // Kick off a background pre-warm of all album asset caches so that DigiKam
+        // recursive scans find the data already in-memory instead of sequentially
+        // fetching each album one at a time.  Only fires when the album list was
+        // actually re-fetched (not a TTL cache hit) and at most once per TTL window.
+        if (fetchedAlbums && this.cache.tryMarkPrefetch())
+            this.PREFETCH_AllAlbumAssets(fetchedAlbums).catch(() => {});
+
+        return result;
+    }
+    private async PREFETCH_AllAlbumAssets(albums: ImmichAlbumDirectoryInfo[]): Promise<void>
+    {
+        const CONCURRENCY = 5;
+        let index = 0;
+
+        const worker = async (): Promise<void> =>
+        {
+            while (index < albums.length)
+            {
+                const album = albums[index++];
+                try
+                {
+                    await this.cache.fetchCachedAssetLists(album.id, {
+                        fetchMeta: async () => ({ updatedAt: album.updatedAt }),
+                        fetchData: async () =>
+                        {
+                            const response = await this.callApi({
+                                method: 'GET',
+                                endpoint: `albums/${album.id}`,
+                                logAction: 'Prefetch album assets',
+                                skipResponseLog: true,
+                            });
+                            applyAlbumDetails(album, response);
+                            return await this.FETCH_AssetsByMetadata(
+                                { albumIds: [album.id], visibility: "timeline" },
+                                { albumIds: [album.id], visibility: "archive" }
+                            );
+                        },
+                        buildFiles: (_assets, _settings) => []
+                    }, this.userSettings);
+                }
+                catch (err)
+                {
+                    logger.debug('ImmichAPI', 'PREFETCH', `Failed to prefetch album ${album.id}: ${err}`);
+                }
+            }
+        };
+
+        const workerCount = Math.min(CONCURRENCY, albums.length);
+        await Promise.allSettled(Array.from({ length: workerCount }, () => worker()));
     }
     public async FETCH_AlbumVirtualBranch(path_id: string)
     {
@@ -490,7 +540,7 @@ export class ImmichAPI
     }
     public async FETCH_AssetsForAlbum(album: ImmichAlbumDirectoryInfo, parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichAssetFileType[]>
     {
-        const cacheKey = parent.fullpath;
+        const cacheKey = album.id;
 
         return await this.cache.fetchCachedAssetLists(cacheKey, {
             // Use the updatedAt already present on the album object (populated by
@@ -571,23 +621,23 @@ export class ImmichAPI
 
                 const items = Array.isArray(response?.assets?.items) ? response.assets.items : [];
 
-                // Cache-hit fast path: if assetInfoCache already has fresh data for this
-                // asset (updatedAt matches), skip the individual GET assets/{id} call entirely.
-                const fetchNeeded: string[] = [];
                 for (const item of items)
                 {
                     if (!item?.id || typeof item.id !== 'string') continue;
                     const cached = this.cache.assetInfoCache.get(item.id);
                     if (cached && item.updatedAt && cached.updatedAt === item.updatedAt)
+                    {
+                        // Cache is fresh — use stored data (avoids re-mapping).
                         byId.set(item.id, cached.data);
+                    }
                     else
-                        fetchNeeded.push(item.id);
+                    {
+                        // Cache miss or stale — map directly from the search payload.
+                        // We request withExif + withPeople + withStacked, so this response
+                        // is equivalent to GET /api/assets/{id}. No per-asset fetches needed.
+                        byId.set(item.id, mapAssetFromApi(item));
+                    }
                 }
-
-                // Fetch misses in parallel — FETCH_Asset handles per-id in-flight dedup.
-                const fetched = await Promise.all(fetchNeeded.map(id => this.FETCH_Asset(id)));
-                for (const asset of fetched)
-                    byId.set(asset.id, asset);
 
                 const nextPageRaw = response?.assets?.nextPage;
                 const nextPage = typeof nextPageRaw === 'string' ? Number.parseInt(nextPageRaw, 10) : Number.NaN;

@@ -147,31 +147,69 @@ services:
 
 > **Note:** FTP support has been removed in this fork. Only SFTP and WebDAV are available.
 
+### Volumes
+
+| Variable | Container path | Description |
+|---|---|---|
+| `SERVER_PATH_APPDATA` | `/data` | Runtime data (session state, caches). |
+| `SERVER_PATH_APPCONFIG` | `/config` | Per-user config and preferences JSON files. |
+| `SERVER_PATH_IMMICH_UPLOADS` | `/immich` | Immich upload directory — required only when `SERVER_OPTION_ENABLE_LOCAL_FILES=true`. |
+| `SERVER_PATH_LOGS` | `/logs` | Server log output directory. |
+
 ### Environment variables
+
+**Immich connection**
 
 | Variable | Default | Description |
 |---|---|---|
 | `SERVER_IMMICH_HOST` | *(required)* | Base URL of your Immich server (e.g. `http://immich-server:2283`). |
-| `SERVER_IMMICH_TIMEZONE` | `UTC` | Timezone used for asset timestamps. |
-| `SERVER_PROTOCOL_HOST` | `0.0.0.0` | Bind address. |
+| `SERVER_IMMICH_TIMEZONE` | `UTC` | IANA timezone used for asset timestamps (e.g. `America/New_York`). |
+
+**Protocols**
+
+| Variable | Default | Description |
+|---|---|---|
+| `SERVER_PROTOCOL_HOST` | `0.0.0.0` | Network interface to bind. Use a specific IP to restrict access. |
 | `SERVER_PROTOCOL_ALLOW_SFTP` | `true` | Enable SFTP. |
 | `SERVER_PROTOCOL_ALLOW_WEBDAV` | `false` | Enable WebDAV. |
-| `SERVER_PROTOCOL_PORTS_SFTP` | `22` | SFTP listen port. |
-| `SERVER_PROTOCOL_PORTS_WEBDAV` | `1900` | WebDAV listen port. |
-| `SERVER_OPTION_ENABLE_UPLOAD_VALIDATION` | `true` | Deduplicate uploads using Immich bulk-check before uploading. |
-| `SERVER_OPTION_ENABLE_LOCAL_FILES` | `false` | Serve asset content directly from the Immich upload path on disk instead of downloading via API. |
-| `SERVER_OPTION_MAX_CONCURRENT_DOWNLOADS` | `6` | Max simultaneous asset downloads from Immich (shared across all connections). |
-| `SERVER_OPTION_MAX_CACHE_BUFFER` | `4MB` | Max size of a single asset buffered in RAM. Larger assets are streamed to a tmp file. Supports suffixes: `B`, `KB`, `MB`, `GB`. |
+| `SERVER_PROTOCOL_PORTS_SFTP` | `22` | SFTP listen port inside the container. |
+| `SERVER_PROTOCOL_PORTS_WEBDAV` | `1900` | WebDAV listen port inside the container. |
+
+**Server options**
+
+| Variable | Default | Description |
+|---|---|---|
+| `SERVER_OPTION_ENABLE_LOCAL_FILES` | `false` | Read asset content directly from `SERVER_PATH_IMMICH_UPLOADS` instead of downloading via the API. Requires the Immich upload directory to be mounted. |
+| `SERVER_OPTION_ENABLE_UPLOAD_VALIDATION` | `true` | Deduplicate uploads using Immich's bulk-check before uploading. |
+| `SERVER_OPTION_MAX_CONCURRENT_DOWNLOADS` | `6` | Max simultaneous asset downloads from Immich (semaphore shared across all connections). |
+| `SERVER_OPTION_MAX_CACHE_BUFFER` | `4MB` | Max size of a single asset kept as an in-memory buffer. Larger assets are streamed to a tmp file. Supports suffixes: `B`, `KB`, `MB`, `GB`. |
 | `SERVER_OPTION_MAX_READ_BATCH_SIZE` | `50` | Directory entries returned per SFTP READDIR reply. |
+| `SERVER_OPTION_SHARED_BUFFER_CACHE_CAP` | `1000` | Max number of asset buffers in the shared LRU cache. When the limit is reached the oldest entry is evicted. |
+
+**Per-user defaults** *(overridable per-user via `[SETTINGS].json`)*
+
+| Variable | Default | Description |
+|---|---|---|
 | `SERVER_USERDEFAULTS_ASSET_FILEPATTERN` | `original` | Asset filename style — see filename patterns table above. |
-| `SERVER_USERDEFAULTS_ASSET_DOWNLOAD_SOURCE` | `original` | `original` or `preview` (`thumbnail` accepted as alias). |
-| `SERVER_USERDEFAULTS_ASSET_ENABLE_SIDECAR_FILES` | `true` | Show `.xmp` sidecar files next to each asset. |
+| `SERVER_USERDEFAULTS_ASSET_DOWNLOAD_SOURCE` | `original` | `original` (full resolution) or `preview` (server-transcoded JPEG thumbnail). |
+| `SERVER_USERDEFAULTS_ASSET_ENABLE_SIDECAR_FILES` | `true` | Expose a `.xmp` sidecar file alongside each asset. |
 | `SERVER_USERDEFAULTS_ALBUM_SUBFOLDER_PATTERN` | ` / ` | Separator used to split album names into nested folders. |
-| `SERVER_LOGS_DEBUG` | `false` | Enable debug-level logging. |
-| `SERVER_LOGS_INFO` | `true` | Enable info-level logging. |
-| `SERVER_LOGS_WARN` | `true` | Enable warn-level logging. |
-| `SERVER_LOGS_ERROR` | `true` | Enable error-level logging. |
-| `SERVER_LOGS_EXPLICIT` | `false` | Enable verbose API request/response logging. |
+| `SERVER_USERDEFAULTS_ENABLE_ALBUM_LINKS` | `true` | Include a browser shortcut file (`.html`) in each album folder that opens the album in Immich. |
+| `SERVER_USERDEFAULTS_ENABLE_ALBUM_METADATA` | `true` | Include a `[ALBUM].yaml` metadata file in each album folder (read/write album description and sharing). |
+| `SERVER_USERDEFAULTS_ENABLE_TRASH_LINK` | `true` | Include a browser shortcut file in the Trash folder that opens Immich trash view. |
+| `SERVER_USERDEFAULTS_DIGIKAM_TRASH_COMPAT` | `false` | Expose a DigiKam-compatible `.dtrash/` directory inside each album folder for native DigiKam trash integration. |
+
+**Logging**
+
+| Variable | Default | Description |
+|---|---|---|
+| `SERVER_LOGS_INFO` | `true` | Lifecycle events (startup, connections, cache activity). |
+| `SERVER_LOGS_WARN` | `true` | Recoverable issues worth noting. |
+| `SERVER_LOGS_ERROR` | `true` | Failures that affect a request or operation. |
+| `SERVER_LOGS_DEBUG` | `false` | Verbose internal state — useful for diagnosing problems. |
+| `SERVER_LOGS_API` | `false` | Per-request API logs (method, endpoint, status, timing). |
+| `SERVER_LOGS_EXPLICIT` | `true` | Verbose internal logs for specific subsystems. |
+| `SERVER_LOGS_FILESYSTEM` | `false` | Per-request filesystem operation logs (method, path, timing). |
 
 ## Connect / test
 
@@ -201,9 +239,10 @@ This lets you connect multiple clients with different asset filename patterns or
 The server uses a multi-level cache to minimise API calls to Immich:
 
 - **Album/asset list cache** — results are re-validated against Immich at most once every 30 seconds. Within that window all connections share the cached result with zero network I/O.
-- **Asset buffer cache** — downloaded asset buffers are shared across all connections in an LRU cache (up to 1000 entries). Assets larger than `SERVER_OPTION_MAX_CACHE_BUFFER` are streamed to a per-session tmp file instead.
-- **In-flight deduplication** — concurrent requests for the same asset share a single download promise; no asset is fetched twice simultaneously.
-- **Persistent cache** — metadata is saved to `/config/cache` so warm data survives server restarts.
+- **Asset buffer cache** — downloaded asset buffers are shared across all connections in an LRU cache (up to `SERVER_OPTION_SHARED_BUFFER_CACHE_CAP` entries). Assets larger than `SERVER_OPTION_MAX_CACHE_BUFFER` are streamed to a per-session tmp file instead.
+- **In-flight deduplication** — concurrent requests for the same path share a single in-flight promise; no album or asset is fetched twice simultaneously across connections.
+- **Background prefetch** — when the album tree is refreshed, all album asset lists are pre-warmed in the background (5 concurrent workers) so that recursive scans (e.g. DigiKam) find data already in cache rather than fetching each album sequentially.
+- **Persistent cache** — asset metadata, album asset lists, and (in preview mode) thumbnail sizes are written to `/config/cache/<userId>-assets.json` so warm data survives server restarts. On first access after a restart the cache is re-validated against Immich in one lightweight timestamp comparison, skipping full re-fetches for unchanged data.
 
 ## Known limitations
 

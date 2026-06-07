@@ -21,6 +21,11 @@ export class ImmichFileSystem implements VirtualFileSystem
     private immichApi: ImmichAPI
     private root: ImmichRootDirectory
     memory: ImmichFileSystemMemory
+    private _statInflight: Map<string, Promise<VFSResponse<VirtualMetadata>>> = new Map();
+    private _listInflight: Map<string, Promise<VirtualMetadata[]>> = new Map();
+    private _statCache: Map<string, { result: VFSResponse<VirtualMetadata>, expiresAt: number }> = new Map();
+    private static readonly STAT_CACHE_TTL_MS = 500;
+    private static readonly STAT_CACHE_PRUNE_THRESHOLD = 500;
 
     constructor()
     {
@@ -52,13 +57,23 @@ export class ImmichFileSystem implements VirtualFileSystem
     }
     async listFiles(currentDir: string)
     {
-        const { node } = await VirtualFsUtils.resolvePath(this.root, currentDir);
-        if (!node || !node.isDir()) throw new Error(`Not a directory: ${currentDir}`);
+        const existing = this._listInflight.get(currentDir);
+        if (existing) return existing;
 
-        logger.filesystem("ImmichFileSystem", "LIST", `Listing files: ${currentDir}`)
-        const result = await (node as VirtualDirectory).event_list()
-        if (result) return result
-        else throw new Error("Unable to process event list")
+        const promise = (async () =>
+        {
+            const { node } = await VirtualFsUtils.resolvePath(this.root, currentDir);
+            if (!node || !node.isDir()) throw new Error(`Not a directory: ${currentDir}`);
+
+            logger.filesystem("ImmichFileSystem", "LIST", `Listing files: ${currentDir}`)
+            const result = await (node as VirtualDirectory).event_list()
+            logger.filesystem("ImmichFileSystem", "LIST", `Done listing files: ${currentDir}`)
+            if (result) return result
+            else throw new Error("Unable to process event list")
+        })().finally(() => this._listInflight.delete(currentDir));
+
+        this._listInflight.set(currentDir, promise);
+        return promise;
     }
     async readFile(filename: string)
     {
@@ -102,13 +117,34 @@ export class ImmichFileSystem implements VirtualFileSystem
         const tmp_result = await this.memory.stat(filename)
         if (tmp_result) return { success: true, contents: tmp_result };
 
-        const { node } = await VirtualFsUtils.resolvePath(this.root, filename);
-        if (!node) return { success: false, contents: undefined }
+        const now = Date.now();
+        const cached = this._statCache.get(filename);
+        if (cached && now < cached.expiresAt) return cached.result;
 
-        logger.filesystem("ImmichFileSystem", "STAT", `Getting stats of: ${filename}`)
+        if (this._statCache.size >= ImmichFileSystem.STAT_CACHE_PRUNE_THRESHOLD)
+        {
+            for (const [key, entry] of this._statCache)
+                if (now >= entry.expiresAt) this._statCache.delete(key);
+        }
 
-        const node_result = await node.event_stat();
-        return { success: true, contents: node_result }
+        const existing = this._statInflight.get(filename);
+        if (existing) return existing;
+
+        const promise = (async () =>
+        {
+            const { node } = await VirtualFsUtils.resolvePath(this.root, filename);
+            if (!node) return { success: false, contents: undefined as any };
+
+            logger.filesystem("ImmichFileSystem", "STAT", `Getting stats of: ${filename}`)
+
+            const node_result = await node.event_stat();
+            const result = { success: true, contents: node_result };
+            this._statCache.set(filename, { result, expiresAt: Date.now() + ImmichFileSystem.STAT_CACHE_TTL_MS });
+            return result;
+        })().finally(() => this._statInflight.delete(filename));
+
+        this._statInflight.set(filename, promise);
+        return promise;
     }
     async rename(oldFileName: string, newFileName: string)
     {
@@ -182,6 +218,7 @@ export class ImmichFileSystem implements VirtualFileSystem
     public invalidatePath(path: string)
     {
         this.immichApi.CACHE_InvalidateFilepath(path)
+        this._statCache.delete(path);
     }
 
 
