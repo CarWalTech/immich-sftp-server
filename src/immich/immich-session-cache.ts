@@ -1,15 +1,14 @@
 import fs from 'fs';
 import path from 'path';
-import { ImmichAlbumDirectoryInfo, ImmichAlbumsDirectoryNode, ImmichUser } from "../utils/immich-api-utils";
-import { ImmichAsset } from "../utils/immich-api-utils";
-import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
-import { DateUtils } from "../../utils/date-utils";
-import { logger } from "../../logger";
-import { ImmichVirtualAssetItem } from "../collections/immich-virtual-directory";
-import { config, UserConfig } from '../../config';
-import { AssetDownloadSource } from '../../utils/config-utils';
-import { ImmichAPI } from '../immich-api';
-import { buildAssetMetadataXMP } from '../utils/immich-metadata-utils';
+import { config, UserConfig } from '../config';
+import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
+import { logger } from "../logger";
+import { AssetDownloadSource } from '../utils/config-utils';
+import { DateUtils } from "../utils/date-utils";
+import { ImmichAssetFileType } from "./files/immich-asset-file";
+import { ImmichAPI } from './immich-api';
+import { ImmichAlbumDirectoryInfo, ImmichAlbumsDirectoryNode, ImmichAsset, ImmichUser } from "./utils/immich-api-utils";
+import { buildAssetMetadataXMP } from './utils/immich-metadata-utils';
 
 const ASSET_CACHE_DIR = '/config/cache';
 const SAVE_DEBOUNCE_MS = 5_000;
@@ -45,7 +44,7 @@ export interface ImmichAssetCacheFetchArgs
     // file system. The raw ImmichAsset[] are shared/cached across connections;
     // the VirtualFile wrappers are rebuilt each time so they never embed a
     // stale connection reference.
-    buildFiles: (assets: ImmichAsset[], settings: UserConfig) => ImmichVirtualAssetItem[];
+    buildFiles: (assets: ImmichAsset[], settings: UserConfig) => ImmichAssetFileType[];
 }
 
 export interface ImmichTreeCacheFetchArgs
@@ -282,7 +281,7 @@ export class ImmichSessionCache
         promise.finally(() => this.inFlightAssetFetches.delete(assetId)).catch(() => { });
         return promise;
     }
-    public async fetchCachedAssetLists(cacheKey: string, { fetchMeta, fetchData, buildFiles }: ImmichAssetCacheFetchArgs, settings: UserConfig): Promise<ImmichVirtualAssetItem[]>
+    public async fetchCachedAssetLists(cacheKey: string, { fetchMeta, fetchData, buildFiles }: ImmichAssetCacheFetchArgs, settings: UserConfig): Promise<ImmichAssetFileType[]>
     {
         const _storeAssetsAndGetIds = (assets: ImmichAsset[], listUpdatedAt: string): string[] =>
         {
@@ -448,7 +447,7 @@ export class ImmichSessionCache
         let xmp: string;
         try
         {
-            if (config.enableLocalFiles)
+            if (config.OPTION_ENABLE_LOCAL_FILES)
             {
                 const filepath = "/immich" + actual_asset.originalPath + ".xmp";
                 const xmp_data = await fs.promises.readFile(filepath, 'utf8');

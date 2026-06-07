@@ -12,18 +12,18 @@ async function startServers(): Promise<void>
   ]);
   const servers: TransferProtocolServer[] = [];
 
-  if (config.enableSFTP)
+  if (config.PROTOCOL_ALLOW_SFTP)
   {
     servers.push(new SftpProtocolServer());
   }
-  if (config.enableWebDAV)
+  if (config.PROTOCOL_ALLOW_WEBDAV)
   {
     servers.push(new WebdavProtocolServer());
   }
 
   if (servers.length === 0)
   {
-    throw new Error('No transfer protocol enabled. Set SERVER_ENABLE_SFTP and/or SERVER_ENABLE_WEBDAV (accepted values: true/1/yes/on or false/0/no/off).');
+    throw new Error('No transfer protocol enabled. Set SERVER_PROTOCOL_ALLOW_SFTP and/or SERVER_PROTOCOL_ALLOW_WEBDAV (accepted values: true/1/yes/on or false/0/no/off).');
   }
 
   await Promise.all(servers.map((server) => server.start()));

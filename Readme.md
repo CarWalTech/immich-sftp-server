@@ -45,7 +45,7 @@ Albums/
 
 These map to Immich albums named `Vacations / Italy` and `Vacations / Japan`. Creating a subfolder creates the corresponding album with the joined name. Renaming a subfolder renames all child albums.
 
-The separator is configurable via `SERVER_OPTION_ALBUM_SUBFOLDER_PATTERN`.
+The separator is configurable via `SERVER_USERDEFAULTS_ALBUM_SUBFOLDER_PATTERN`.
 
 ## Album metadata (`[ALBUM].yaml`)
 
@@ -74,7 +74,7 @@ Add `#nosync` to an album description in Immich (or set `hidden: true` in the YA
 
 ## XMP sidecar files
 
-When `SERVER_OPTION_ASSET_ENABLE_SIDECAR_FILES=true` (default), each asset is accompanied by a `.xmp` file. Reading it returns the asset's metadata in XMP/XML format. Writing back a modified `.xmp` syncs metadata changes (rating, description, tags, etc.) back to Immich.
+When `SERVER_USERDEFAULTS_ASSET_ENABLE_SIDECAR_FILES=true` (default), each asset is accompanied by a `.xmp` file. Reading it returns the asset's metadata in XMP/XML format. Writing back a modified `.xmp` syncs metadata changes (rating, description, tags, etc.) back to Immich.
 
 ## Per-user settings (`[SETTINGS].json`)
 
@@ -133,13 +133,13 @@ services:
       - "22832:22"    # SFTP
       - "19000:1900"  # WebDAV
     environment:
-      IMMICH_HOST: https://<your-immich-server>
-      IMMICH_TIMEZONE: UTC
-      SERVER_ENABLE_SFTP: "true"
-      SERVER_ENABLE_WEBDAV: "false"
-      SERVER_PORT_SFTP: "22"
-      SERVER_PORT_WEBDAV: "1900"
-      SERVER_HOST: "0.0.0.0"
+      SERVER_IMMICH_HOST: https://<your-immich-server>
+      SERVER_IMMICH_TIMEZONE: UTC
+      SERVER_PROTOCOL_ALLOW_SFTP: "true"
+      SERVER_PROTOCOL_ALLOW_WEBDAV: "false"
+      SERVER_PROTOCOL_PORTS_SFTP: "22"
+      SERVER_PROTOCOL_PORTS_WEBDAV: "1900"
+      SERVER_PROTOCOL_HOST: "0.0.0.0"
     volumes:
       - ./config:/config
     restart: unless-stopped
@@ -151,22 +151,22 @@ services:
 
 | Variable | Default | Description |
 |---|---|---|
-| `IMMICH_HOST` | *(required)* | Base URL of your Immich server (e.g. `http://immich-server:2283`). |
-| `IMMICH_TIMEZONE` | `UTC` | Timezone used for asset timestamps. |
-| `SERVER_HOST` | `0.0.0.0` | Bind address. |
-| `SERVER_ENABLE_SFTP` | `true` | Enable SFTP. |
-| `SERVER_ENABLE_WEBDAV` | `false` | Enable WebDAV. |
-| `SERVER_PORT_SFTP` | `22` | SFTP listen port. |
-| `SERVER_PORT_WEBDAV` | `1900` | WebDAV listen port. |
-| `SERVER_OPTION_ASSET_FILEPATTERN` | `original` | Asset filename style — see filename patterns table above. |
-| `SERVER_OPTION_ASSET_DOWNLOAD_SOURCE` | `original` | `original` or `preview` (`thumbnail` accepted as alias). |
-| `SERVER_OPTION_ASSET_ENABLE_SIDECAR_FILES` | `true` | Show `.xmp` sidecar files next to each asset. |
-| `SERVER_OPTION_ALBUM_SUBFOLDER_PATTERN` | ` / ` | Separator used to split album names into nested folders. |
+| `SERVER_IMMICH_HOST` | *(required)* | Base URL of your Immich server (e.g. `http://immich-server:2283`). |
+| `SERVER_IMMICH_TIMEZONE` | `UTC` | Timezone used for asset timestamps. |
+| `SERVER_PROTOCOL_HOST` | `0.0.0.0` | Bind address. |
+| `SERVER_PROTOCOL_ALLOW_SFTP` | `true` | Enable SFTP. |
+| `SERVER_PROTOCOL_ALLOW_WEBDAV` | `false` | Enable WebDAV. |
+| `SERVER_PROTOCOL_PORTS_SFTP` | `22` | SFTP listen port. |
+| `SERVER_PROTOCOL_PORTS_WEBDAV` | `1900` | WebDAV listen port. |
 | `SERVER_OPTION_ENABLE_UPLOAD_VALIDATION` | `true` | Deduplicate uploads using Immich bulk-check before uploading. |
 | `SERVER_OPTION_ENABLE_LOCAL_FILES` | `false` | Serve asset content directly from the Immich upload path on disk instead of downloading via API. |
 | `SERVER_OPTION_MAX_CONCURRENT_DOWNLOADS` | `6` | Max simultaneous asset downloads from Immich (shared across all connections). |
 | `SERVER_OPTION_MAX_CACHE_BUFFER` | `4MB` | Max size of a single asset buffered in RAM. Larger assets are streamed to a tmp file. Supports suffixes: `B`, `KB`, `MB`, `GB`. |
 | `SERVER_OPTION_MAX_READ_BATCH_SIZE` | `50` | Directory entries returned per SFTP READDIR reply. |
+| `SERVER_USERDEFAULTS_ASSET_FILEPATTERN` | `original` | Asset filename style — see filename patterns table above. |
+| `SERVER_USERDEFAULTS_ASSET_DOWNLOAD_SOURCE` | `original` | `original` or `preview` (`thumbnail` accepted as alias). |
+| `SERVER_USERDEFAULTS_ASSET_ENABLE_SIDECAR_FILES` | `true` | Show `.xmp` sidecar files next to each asset. |
+| `SERVER_USERDEFAULTS_ALBUM_SUBFOLDER_PATTERN` | ` / ` | Separator used to split album names into nested folders. |
 | `SERVER_LOGS_DEBUG` | `false` | Enable debug-level logging. |
 | `SERVER_LOGS_INFO` | `true` | Enable info-level logging. |
 | `SERVER_LOGS_WARN` | `true` | Enable warn-level logging. |

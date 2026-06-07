@@ -1,12 +1,15 @@
-import { isObject } from "../../utils/common-utils";
-import { PathUtils } from "../../utils/path-utils";
-import { ImmichAlbumFolder } from "../collections/immich-album-folder";
-import { ImmichVirtualAssetItem, ImmichVirtualDirectory } from "../collections/immich-virtual-directory";
-import { ImmichVirtualAssetFile } from "../collections/immich-virtual-asset-file";
 import { logger } from "../../logger";
+import { isObject } from "../../utils/common-utils";
 import { DateUtils } from "../../utils/date-utils";
-import { ImmichVirtualAssetSidecar } from "../collections/immich-virtual-asset-sidecar";
-import { config } from "../../config";
+import { PathUtils } from "../../utils/path-utils";
+import { ImmichAssetFile, ImmichAssetFileType, ImmichAssetSidecarFile } from "../files/immich-asset-file";
+import { ImmichVirtualDirectory } from "../immich-virtual-directory";
+
+
+export const USERNAME_API_KEY = 'apikey'
+export const USERNAME_FLAG_SEPERATOR = '@'
+
+export const API_USERAGENT = 'Immich File Bridge (Linux)'
 
 export interface ImmichAlbumUser
 {
@@ -412,7 +415,7 @@ export function mapAssetFromApi(asset: any): ImmichAsset
         fileSizeInByte: asset.exifInfo?.fileSizeInByte ?? 0,
     };
 }
-export function mapFilesFromAssets(assets: ImmichAsset[], parent: ImmichVirtualDirectory, reserved_names?: Set<string>, enableSidecars: boolean = true): Array<ImmichVirtualAssetItem>
+export function mapFilesFromAssets(assets: ImmichAsset[], parent: ImmichVirtualDirectory, reserved_names?: Set<string>, enableSidecars: boolean = true): Array<ImmichAssetFileType>
 {
     function buildUniqueName(base: string, extension: string, reserved: Set<string>, nameCount: Map<string, number>): string
     {
@@ -442,7 +445,7 @@ export function mapFilesFromAssets(assets: ImmichAsset[], parent: ImmichVirtualD
         return finalName;
     }
 
-    const files = new Array<ImmichVirtualAssetItem>(enableSidecars ? assets.length * 2 : assets.length);
+    const files = new Array<ImmichAssetFileType>(enableSidecars ? assets.length * 2 : assets.length);
     const reservedNames = reserved_names ?? new Set<string>();
     const nameCount = new Map<string, number>();
 
@@ -456,8 +459,8 @@ export function mapFilesFromAssets(assets: ImmichAsset[], parent: ImmichVirtualD
 
 
         const idx = enableSidecars ? i * 2 : i;
-        files[idx] = new ImmichVirtualAssetFile(asset, finalName, parent, parent.file_system);
-        if (enableSidecars) files[idx + 1] = new ImmichVirtualAssetSidecar(asset, finalName + ".xmp", parent, parent.file_system);
+        files[idx] = new ImmichAssetFile(asset, finalName, parent, parent.file_system);
+        if (enableSidecars) files[idx + 1] = new ImmichAssetSidecarFile(asset, finalName + ".xmp", parent, parent.file_system);
     }
 
     return files;

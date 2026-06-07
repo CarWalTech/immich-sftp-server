@@ -1,16 +1,16 @@
-import fs from 'fs';
-import { AcceptConnection, Attributes, AuthContext, Connection, RejectConnection, Server, ServerConfig, ServerConnectionListener, Session, SFTPWrapper } from 'ssh2';
-import path, { basename } from 'path';
 import crypto from 'crypto';
+import fs from 'fs';
+import path, { basename } from 'path';
+import { AcceptConnection, Attributes, AuthContext, Connection, RejectConnection, Server, ServerConfig, ServerConnectionListener, Session, SFTPWrapper } from 'ssh2';
 import tmp from 'tmp';
-import { VirtualFileSystem } from '../filesystem/virtual-file-system';
-import { ImmichFileSystem } from '../immich/immich-file-system';
 import { config } from '../config';
-import { TransferProtocolServer } from './transfer-protocol-server';
-import { VirtualMetadata } from '../filesystem/virtual-metadata';
-import { logger } from '../logger';
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
+import { VirtualFileSystem } from '../filesystem/virtual-file-system';
+import { VirtualMetadata } from '../filesystem/virtual-metadata';
+import { ImmichFileSystem } from '../immich/immich-file-system';
+import { logger } from '../logger';
 import { DateUtils } from '../utils/date-utils';
+import { TransferProtocolServer } from './transfer-protocol-server';
 
 // #region TCP Receivers
 
@@ -789,7 +789,7 @@ function createServerConfig(): ServerConfig
 function createConnectionConfig(): SftpSessionConfig
 {
   return {
-    batchSize: config.maxReadBatchSize
+    batchSize: config.OPTION_MAX_READ_BATCH_SIZE
   }
 }
 function createEphemeralHostKeySync(): Buffer
@@ -1013,9 +1013,9 @@ export class SftpProtocolServer implements TransferProtocolServer
   {
     await new Promise<void>((resolve, reject) =>
     {
-      server.listen(config.portSFTP, config.serverHost, function ()
+      server.listen(config.PROTOCOL_PORTS_SFTP, config.PROTOCOL_HOST, function ()
       {
-        logger.info('SFTP', 'SERVER', `SFTP server listening on ${config.serverHost}:${config.portSFTP}`);
+        logger.info('SFTP', 'SERVER', `SFTP server listening on ${config.PROTOCOL_HOST}:${config.PROTOCOL_PORTS_SFTP}`);
         resolve();
       });
       server.on('error', reject);

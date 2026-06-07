@@ -9,8 +9,8 @@ services:
       ts-node-dev --inspect=0.0.0.0:9229 src/server.ts
     ports:
       - "9229:9229" # Development Port
-      - "22832:${SERVER_PORT_SFTP}" # SFTP
-      - "19000:${SERVER_PORT_WEBDAV}" # WebDAV
+      - "22832:${SERVER_PROTOCOL_PORTS_SFTP}" # SFTP
+      - "19000:${SERVER_PROTOCOL_PORTS_WEBDAV}" # WebDAV
     volumes:
       - ./:/app
     env_file:

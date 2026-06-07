@@ -1,28 +1,19 @@
-import { VirtualFile } from "../../filesystem/virtual-file";
+import { VirtualContentBuffer, VirtualContentBufferUtils } from "../../filesystem/virtual-content-buffer";
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
-import { VirtualNode } from "../../filesystem/virtual-node";
-import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
-import { PathUtils } from "../../utils/path-utils";
-import { ImmichFileSystem } from "../immich-file-system";
-import { getAlbumMtime, ImmichAlbumBase } from "../utils/immich-api-utils";
-import { ImmichRootDirectory } from "./immich-root-directory";
-import { FILENAME_OPEN_IN_IMMICH } from '../utils/immich-fs-utils';
-import { VirtualContentBufferUtils } from "../../filesystem/virtual-content-buffer";
-import { buildAlbumBrowserLink } from "../utils/immich-metadata-utils";
-import { ImmichAlbumDirectoryInfo } from '../utils/immich-api-utils';
 import { logger } from "../../logger";
-import { ImmichAlbumFolder } from "./immich-album-folder";
 import { DateUtils } from "../../utils/date-utils";
+import { ImmichFileSystem } from "../immich-file-system";
+import { ImmichVirtualFile } from "../immich-virtual-file";
+import { FILENAME_OPEN_IN_IMMICH } from '../utils/immich-fs-utils';
 
-export class ImmichWebLinkFile extends VirtualFile
+export class ImmichWebLinkFile extends ImmichVirtualFile
 {
-    file_system: ImmichFileSystem
+
 
     constructor(parent: VirtualDirectory, file_system: ImmichFileSystem)
     {
-        super(FILENAME_OPEN_IN_IMMICH, undefined, parent)
-        this.file_system = file_system
+        super(file_system, FILENAME_OPEN_IN_IMMICH, undefined, parent)
     }
 
     async event_buildlink()

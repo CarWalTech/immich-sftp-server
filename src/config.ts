@@ -1,93 +1,89 @@
 import fs from 'fs';
 import path from 'path';
-import { getEnvBoolean, getEnvByteSize, getOptionalEnvNumberRange, getEnvNumber, getEnvOrDefault, getOptionalEnv, getOptionalEnvNumber, requireEnv, NumberRange } from './utils/env-utils';
 import { logger } from './logger';
-import { getOptionalNestedBoolean, getOptionalNestedString } from './utils/yaml-utils';
 import { AssetDownloadSource, AssetFileNamePattern, parseAssetDownloadSource, parseAssetFileNamePattern } from './utils/config-utils';
+import { getEnvBoolean, getEnvByteSize, getEnvNumber, getEnvOrDefault, getOptionalEnv, requireEnv } from './utils/env-utils';
+import { getOptionalNestedBoolean, getOptionalNestedString } from './utils/yaml-utils';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const SHARED_BUFFER_CACHE_CAP = 1000;
 
 export class Config
 {
   // immich settings
-  immichHost: string
-  immichTimezone: string
-  immichUserDefaults: UserConfig
-
-  // server protocols
-  enableSFTP: boolean
-  enableWebDAV: boolean
-
-  // server hostname
-  serverHost: string
-
-  // server ports
-  portSFTP: number
-  portWebDAV: number
-  portPassiveFTP?: NumberRange
-
-  // server feature toggles
-  enableLocalFiles: boolean
-  enableUploadValidation: boolean
-
-  // server size settings
-  maxConcurrentDLs: number
-  maxReadBatchSize: number
-  maxCacheBufferSize: number
-
-  // server asset / album settings
-  assetSidecarsEnabled: boolean
-  assetFilePattern: AssetFileNamePattern
-  assetDownloadSource: AssetDownloadSource
-  albumFolderSeperator: string
+  IMMICH_HOST: string
+  IMMICH_TIMEZONE: string
+  IMMICH_USERDEFAULTS: UserConfig
 
   // server logging settings
-  ENABLE_DEBUG_LOGS: boolean;
-  ENABLE_INFO_LOGS: boolean;
-  ENABLE_WARN_LOGS: boolean;
-  ENABLE_ERROR_LOGS: boolean;
-  ENABLE_EXPLICIT_LOGS: boolean;
+  LOGS_DEBUG: boolean;
+  LOGS_INFO: boolean;
+  LOGS_WARN: boolean;
+  LOGS_ERROR: boolean;
+  LOGS_EXPLICIT: boolean;
 
+  // server protocols
+  PROTOCOL_HOST: string
+  PROTOCOL_ALLOW_SFTP: boolean
+  PROTOCOL_ALLOW_WEBDAV: boolean
+  PROTOCOL_PORTS_SFTP: number
+  PROTOCOL_PORTS_WEBDAV: number
+
+  // server settings
+  OPTION_ENABLE_LOCAL_FILES: boolean
+  OPTION_ENABLE_UPLOAD_VALIDATION: boolean
+  OPTION_MAX_CONCURRENT_DOWNLOADS: number
+  OPTION_MAX_READ_BATCH_SIZE: number
+  OPTION_MAX_CACHE_BUFFER: number
+  OPTION_SHARED_BUFFER_CACHE_CAP: number
+
+  // server user defaults
+  USERDEFAULTS_ASSET_ENABLE_SIDECAR_FILES: boolean
+  USERDEFAULTS_ASSET_FILEPATTERN: AssetFileNamePattern
+  USERDEFAULTS_ASSET_DOWNLOAD_SOURCE: AssetDownloadSource
+  USERDEFAULTS_ALBUM_SUBFOLDER_PATTERN: string
+  USERDEFAULTS_ENABLE_ALBUM_LINKS: boolean;
+  USERDEFAULTS_ENABLE_ALBUM_METADATA: boolean;
+  USERDEFAULTS_ENABLE_TRASH_LINK: boolean;
+  USERDEFAULTS_DIGIKAM_TRASH_COMPAT: boolean;
 
   constructor()
   {
     // immich settings
-    this.immichHost = requireEnv('IMMICH_HOST');
-    this.immichTimezone = getEnvOrDefault('IMMICH_TIMEZONE', 'UTC');
-    this.immichUserDefaults = UserConfigLoader.DEFAULTS
+    this.IMMICH_HOST = requireEnv('SERVER_IMMICH_HOST');
+    this.IMMICH_TIMEZONE = getEnvOrDefault('SERVER_IMMICH_TIMEZONE', 'UTC');
+    this.IMMICH_USERDEFAULTS = UserConfigLoader.DEFAULTS
 
-    // server modes
-    this.enableSFTP = getEnvBoolean('SERVER_ENABLE_SFTP', true);
-    this.enableWebDAV = getEnvBoolean('SERVER_ENABLE_WEBDAV', false);
+    // server logging
+    this.LOGS_DEBUG = getEnvBoolean('SERVER_LOGS_DEBUG', false)
+    this.LOGS_INFO = getEnvBoolean('SERVER_LOGS_INFO', true)
+    this.LOGS_WARN = getEnvBoolean('SERVER_LOGS_WARN', true)
+    this.LOGS_ERROR = getEnvBoolean('SERVER_LOGS_ERROR', true)
+    this.LOGS_EXPLICIT = getEnvBoolean('SERVER_LOGS_EXPLICIT', false)
 
-    // server hostname
-    this.serverHost = getEnvOrDefault('SERVER_HOST', '0.0.0.0');
-
-    // server ports
-    this.portSFTP = getEnvNumber('SERVER_PORT_SFTP', 22);
-    this.portWebDAV = getEnvNumber('SERVER_PORT_WEBDAV', 1900);
+    // server protocol
+    this.PROTOCOL_HOST = getEnvOrDefault('SERVER_PROTOCOL_HOST', '0.0.0.0');
+    this.PROTOCOL_ALLOW_WEBDAV = getEnvBoolean('SERVER_PROTOCOL_ALLOW_WEBDAV', false);
+    this.PROTOCOL_ALLOW_SFTP = getEnvBoolean('SERVER_PROTOCOL_ALLOW_SFTP', true);
+    this.PROTOCOL_PORTS_SFTP = getEnvNumber('SERVER_PROTOCOL_PORTS_SFTP', 22);
+    this.PROTOCOL_PORTS_WEBDAV = getEnvNumber('SERVER_PROTOCOL_PORTS_WEBDAV', 1900);
 
     // server settings
-    this.enableLocalFiles = getEnvBoolean('SERVER_OPTION_ENABLE_LOCAL_FILES', false);
-    this.enableUploadValidation = getEnvBoolean('SERVER_OPTION_ENABLE_UPLOAD_VALIDATION', true);
+    this.OPTION_ENABLE_LOCAL_FILES = getEnvBoolean('SERVER_OPTION_ENABLE_LOCAL_FILES', false);
+    this.OPTION_ENABLE_UPLOAD_VALIDATION = getEnvBoolean('SERVER_OPTION_ENABLE_UPLOAD_VALIDATION', true);
+    this.OPTION_MAX_CONCURRENT_DOWNLOADS = getEnvNumber('SERVER_OPTION_MAX_CONCURRENT_DOWNLOADS', 6, true);
+    this.OPTION_MAX_READ_BATCH_SIZE = getEnvNumber('SERVER_OPTION_MAX_READ_BATCH_SIZE', 50);
+    this.OPTION_MAX_CACHE_BUFFER = getEnvByteSize('SERVER_OPTION_MAX_CACHE_BUFFER', '4MB')
+    this.OPTION_SHARED_BUFFER_CACHE_CAP = getEnvNumber('SERVER_OPTION_SHARED_BUFFER_CACHE_CAP', 1000)
 
-    // server size settings
-    this.maxConcurrentDLs = getEnvNumber('SERVER_OPTION_MAX_CONCURRENT_DOWNLOADS', 6, true);
-    this.maxReadBatchSize = getEnvNumber('SERVER_OPTION_MAX_READ_BATCH_SIZE', 50);
-    this.maxCacheBufferSize = getEnvByteSize('SERVER_OPTION_MAX_CACHE_BUFFER', '4MB')
-
-    // server asset / album settings
-    this.assetSidecarsEnabled = getEnvBoolean('SERVER_OPTION_ASSET_ENABLE_SIDECAR_FILES', true);
-    this.assetFilePattern = parseAssetFileNamePattern(getOptionalEnv('SERVER_OPTION_ASSET_FILEPATTERN')) ?? 'original';
-    this.assetDownloadSource = parseAssetDownloadSource(getOptionalEnv('SERVER_OPTION_ASSET_DOWNLOAD_SOURCE')) ?? 'original';
-    this.albumFolderSeperator = getEnvOrDefault('SERVER_OPTION_ALBUM_SUBFOLDER_PATTERN', " / ");
-
-    this.ENABLE_DEBUG_LOGS = getEnvBoolean('SERVER_LOGS_DEBUG', false)
-    this.ENABLE_INFO_LOGS = getEnvBoolean('SERVER_LOGS_INFO', true)
-    this.ENABLE_WARN_LOGS = getEnvBoolean('SERVER_LOGS_WARN', true)
-    this.ENABLE_ERROR_LOGS = getEnvBoolean('SERVER_LOGS_ERROR', true)
-    this.ENABLE_EXPLICIT_LOGS = getEnvBoolean('SERVER_LOGS_EXPLICIT', false)
+    // server user defaults
+    this.USERDEFAULTS_ASSET_ENABLE_SIDECAR_FILES = getEnvBoolean('SERVER_USERDEFAULTS_ASSET_ENABLE_SIDECAR_FILES', true);
+    this.USERDEFAULTS_ASSET_FILEPATTERN = parseAssetFileNamePattern(getOptionalEnv('SERVER_USERDEFAULTS_ASSET_FILEPATTERN')) ?? 'original';
+    this.USERDEFAULTS_ASSET_DOWNLOAD_SOURCE = parseAssetDownloadSource(getOptionalEnv('SERVER_USERDEFAULTS_ASSET_DOWNLOAD_SOURCE')) ?? 'original';
+    this.USERDEFAULTS_ALBUM_SUBFOLDER_PATTERN = getEnvOrDefault('SERVER_USERDEFAULTS_ALBUM_SUBFOLDER_PATTERN', " / ");
+    this.USERDEFAULTS_ENABLE_ALBUM_LINKS = getEnvBoolean('SERVER_USERDEFAULTS_ENABLE_ALBUM_LINKS', true);
+    this.USERDEFAULTS_ENABLE_ALBUM_METADATA = getEnvBoolean('SERVER_USERDEFAULTS_ENABLE_ALBUM_METADATA', true);
+    this.USERDEFAULTS_ENABLE_TRASH_LINK = getEnvBoolean('SERVER_USERDEFAULTS_ENABLE_TRASH_LINK', true);
+    this.USERDEFAULTS_DIGIKAM_TRASH_COMPAT = getEnvBoolean('SERVER_USERDEFAULTS_DIGIKAM_TRASH_COMPAT', false);
   }
 }
 
@@ -97,6 +93,10 @@ export interface UserConfig
   assetFileNamePattern: AssetFileNamePattern
   assetDownloadSource: AssetDownloadSource
   assetSidecarsEnabled: boolean
+  enableAlbumLinks: boolean
+  enableAlbumMetadata: boolean
+  enableTrashLink: boolean
+  digikamTrashCompat: boolean
 }
 
 export class UserConfigLoader
@@ -130,21 +130,33 @@ export class UserConfigLoader
     const envDownloadSource = parseAssetDownloadSource(getOptionalNestedString(json, ['assetDownloadSource']));
     const envSubAlbumSeperator = getOptionalNestedString(json, ['subAlbumSeperator'], false)
     const envEnableSidecarFiles = getOptionalNestedBoolean(json, ['assetSidecarsEnabled'])
+    const envEnableAlbumLinks = getOptionalNestedBoolean(json, ['enableAlbumLinks'])
+    const envEnableAlbumMetadata = getOptionalNestedBoolean(json, ['enableAlbumMetadata'])
+    const envEnableTrashLink = getOptionalNestedBoolean(json, ['enableTrashLink'])
+    const envDigikamTrashCompat = getOptionalNestedBoolean(json, ['envDigikamTrashCompat'])
     return {
       subAlbumSeperator: envSubAlbumSeperator ?? this.DEFAULTS.subAlbumSeperator,
       assetDownloadSource: envDownloadSource ?? this.DEFAULTS.assetDownloadSource,
       assetFileNamePattern: envFileNamePattern ?? this.DEFAULTS.assetFileNamePattern,
-      assetSidecarsEnabled: envEnableSidecarFiles ?? this.DEFAULTS.assetSidecarsEnabled
+      assetSidecarsEnabled: envEnableSidecarFiles ?? this.DEFAULTS.assetSidecarsEnabled,
+      enableAlbumLinks: envEnableAlbumLinks ?? config.USERDEFAULTS_ENABLE_ALBUM_LINKS,
+      enableAlbumMetadata: envEnableAlbumMetadata ?? config.USERDEFAULTS_ENABLE_ALBUM_METADATA,
+      enableTrashLink: envEnableTrashLink ?? config.USERDEFAULTS_ENABLE_TRASH_LINK,
+      digikamTrashCompat: envDigikamTrashCompat ?? config.USERDEFAULTS_DIGIKAM_TRASH_COMPAT
     }
   }
   public static load_defaults(): UserConfig
   {
     var config = new Config();
     return {
-      subAlbumSeperator: config.albumFolderSeperator,
-      assetFileNamePattern: config.assetFilePattern,
-      assetDownloadSource: config.assetDownloadSource,
-      assetSidecarsEnabled: config.assetSidecarsEnabled
+      subAlbumSeperator: config.USERDEFAULTS_ALBUM_SUBFOLDER_PATTERN,
+      assetFileNamePattern: config.USERDEFAULTS_ASSET_FILEPATTERN,
+      assetDownloadSource: config.USERDEFAULTS_ASSET_DOWNLOAD_SOURCE,
+      assetSidecarsEnabled: config.USERDEFAULTS_ASSET_ENABLE_SIDECAR_FILES,
+      enableAlbumLinks: config.USERDEFAULTS_ENABLE_ALBUM_LINKS,
+      enableAlbumMetadata: config.USERDEFAULTS_ENABLE_ALBUM_METADATA,
+      enableTrashLink: config.USERDEFAULTS_ENABLE_TRASH_LINK,
+      digikamTrashCompat: config.USERDEFAULTS_DIGIKAM_TRASH_COMPAT
     }
   }
 

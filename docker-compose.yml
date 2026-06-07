@@ -9,8 +9,8 @@ services:
     env_file:
       - .env
     ports:
-      - "22832:${SERVER_PORT_SFTP}" # SFTP
-      - "19000:${SERVER_PORT_WEBDAV}" # WebDAV
+      - "22832:${SERVER_PROTOCOL_PORTS_SFTP}" # SFTP
+      - "19000:${SERVER_PROTOCOL_PORTS_WEBDAV}" # WebDAV
     volumes:
       - ${SERVER_PATH_APPDATA}:/data
       - ${SERVER_PATH_APPCONFIG}:/config

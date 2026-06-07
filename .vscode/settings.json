@@ -10,14 +10,16 @@
             "onAutoForward": "notify",
             "label": "WebDAV"
         },
-        "22100": {
-            "onAutoForward": "notify",
-            "label": "FTP"
-        },
         "22832": {
             "onAutoForward": "notify",
             "label": "SFTP",
         },
     },
-    "DockerRun.DisableAutoGenerateConfig": true
+    "DockerRun.DisableAutoGenerateConfig": true,
+    "editor.formatOnSave": true,
+    "[typescript]": {
+        "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit"
+        }
+    }
 }

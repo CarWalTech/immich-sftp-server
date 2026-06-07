@@ -2,19 +2,19 @@
 // WebDAV Protocol Server — SFTP‑Equivalent Behavior
 // ──────────────────────────────────────────────────────────────
 
-import fs from 'fs';
-import tmp from 'tmp';
 import crypto from 'crypto';
-import { Writable, Readable } from 'stream';
+import fs from 'fs';
+import path from 'path';
+import { Readable, Writable } from 'stream';
+import tmp from 'tmp';
 import { v2 as webdav } from 'webdav-server';
 import { config } from '../config';
-import { ImmichFileSystem } from '../immich/immich-file-system';
-import { VirtualFileSystem } from '../filesystem/virtual-file-system';
-import { TransferProtocolServer } from './transfer-protocol-server';
-import { logger } from '../logger';
-import path from 'path';
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
+import { VirtualFileSystem } from '../filesystem/virtual-file-system';
+import { ImmichFileSystem } from '../immich/immich-file-system';
+import { logger } from '../logger';
 import { DateUtils } from '../utils/date-utils';
+import { TransferProtocolServer } from './transfer-protocol-server';
 
 // ──────────────────────────────────────────────────────────────
 // Shared path normalization (identical to SFTP)
@@ -424,8 +424,8 @@ export class WebdavProtocolServer implements TransferProtocolServer
   readonly name = 'webdav';
 
   private readonly server = new webdav.WebDAVServer({
-    port: config.portWebDAV,
-    hostname: config.serverHost,
+    port: config.PROTOCOL_PORTS_WEBDAV,
+    hostname: config.PROTOCOL_HOST,
     requireAuthentification: true,
     httpAuthentication: new webdav.HTTPBasicAuthentication(
       new ImmichWebdavUserManager(),
@@ -445,7 +445,7 @@ export class WebdavProtocolServer implements TransferProtocolServer
           reject(new Error('WebDAV server failed to start'));
           return;
         }
-        logger.info(`WebDAV`, 'SERVER', `WebDAV server listening on ${config.serverHost}:${config.portWebDAV}`);
+        logger.info(`WebDAV`, 'SERVER', `WebDAV server listening on ${config.PROTOCOL_HOST}:${config.PROTOCOL_PORTS_WEBDAV}`);
         resolve();
       });
     });

@@ -1,13 +1,11 @@
+import Builder from 'fast-xml-builder';
 import fs from 'fs';
 import YAML from 'yaml';
-import { isObject } from '../../utils/common-utils';
-import { ImmichAPI } from '../immich-api';
-import { ImmichAsset, ImmichTagDirectoryInfo } from "./immich-api-utils";
-import { ImmichAlbumBase, ImmichAlbumUser, ImmichUser, isCurrentUserAlbumOwner } from './immich-api-utils';
-import { ImmichFileSystem } from '../immich-file-system';
 import { config } from '../../config';
-import Builder from 'fast-xml-builder';
+import { isObject } from '../../utils/common-utils';
 import { XMPUtils } from '../../utils/xmp-utils';
+import { ImmichAPI } from '../immich-api';
+import { ImmichAlbumBase, ImmichAlbumUser, ImmichAsset, ImmichUser, isCurrentUserAlbumOwner } from "./immich-api-utils";
 
 // Constants
 const NOSYNC_TAG = '#nosync';
@@ -614,7 +612,7 @@ export async function saveAssetMetadataFileContent(asset: ImmichAsset, contents:
     await _syncAssetTagsFromXmp(asset, newTagValues, api);
 
     // --- Write XMP back to local sidecar if local-files mode is enabled ---
-    if (config.enableLocalFiles)
+    if (config.OPTION_ENABLE_LOCAL_FILES)
     {
         const filepath = "/immich" + asset.originalPath + ".xmp";
         await fs.promises.writeFile(filepath, contents, 'utf8');

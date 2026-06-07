@@ -1,12 +1,11 @@
-import { logger } from "../../logger";
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
 import { VirtualNode } from "../../filesystem/virtual-node";
-import { ImmichAlbumFolder } from "../collections/immich-album-folder";
-import { ImmichVirtualAssetFile } from "../collections/immich-virtual-asset-file";
-import { ImmichRootTrashDirectory, ImmichRootUnsortedDirectory } from "../collections/immich-root-commons";
+import { logger } from "../../logger";
+import { ImmichAlbumFolder } from "../directories/immich-albums-directory";
+import { ImmichRootTrashDirectory } from "../directories/immich-trash-directory";
+import { ImmichRootUnsortedDirectory } from "../directories/immich-unsorted-directory";
+import { ImmichAssetFile } from "../files/immich-asset-file";
 import { ImmichAPI } from "../immich-api";
-import tmp from "tmp"
-import path from "path";
 
 export const FILENAME_FILESYSTEM_OPTIONS = '[SETTINGS].json';
 export const FILENAME_ALBUM_PROPERTIES = '[ALBUM].yaml';
@@ -16,7 +15,7 @@ export const DIRNAME_ALBUMS = "Albums"
 export const DIRNAME_TRASH = "Trash"
 export const DIRNAME_UNSORTED = "Unsorted"
 
-export async function deleteAssetFromContainer(item: ImmichVirtualAssetFile, api: ImmichAPI, container: VirtualDirectory): Promise<boolean>
+export async function deleteAssetFromContainer(item: ImmichAssetFile, api: ImmichAPI, container: VirtualDirectory): Promise<boolean>
 {
     if (item.asset_data)
     {
@@ -41,7 +40,7 @@ export async function deleteAssetFromContainer(item: ImmichVirtualAssetFile, api
     return false
 }
 
-export function canSendAssetTo(item: ImmichVirtualAssetFile, container: VirtualDirectory)
+export function canSendAssetTo(item: ImmichAssetFile, container: VirtualDirectory)
 {
     if (container instanceof ImmichAlbumFolder)
     {
@@ -62,7 +61,7 @@ export function canSendAssetTo(item: ImmichVirtualAssetFile, container: VirtualD
         return false;
     }
 }
-export function canRecieveAssetFrom(item: ImmichVirtualAssetFile, container: VirtualDirectory)
+export function canRecieveAssetFrom(item: ImmichAssetFile, container: VirtualDirectory)
 {
     if (container instanceof ImmichAlbumFolder)
     {
@@ -98,7 +97,7 @@ export function canSendFileTo(item: VirtualNode, container: VirtualDirectory)
         logger.warn('ImmichFsUtils', 'canSendFileTo', "Can't move album directories yet!")
         return false;
     }
-    else if (item instanceof ImmichVirtualAssetFile)
+    else if (item instanceof ImmichAssetFile)
     {
         return canSendAssetTo(item, container);
     }
@@ -110,7 +109,7 @@ export function canSendFileTo(item: VirtualNode, container: VirtualDirectory)
 }
 export function canRecieveFileFrom(item: VirtualNode, container: VirtualDirectory)
 {
-    if (item instanceof ImmichVirtualAssetFile)
+    if (item instanceof ImmichAssetFile)
     {
         return canRecieveAssetFrom(item, container);
     }

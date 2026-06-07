@@ -1,26 +1,20 @@
-import { VFSResponse, VirtualFileSystem } from "../filesystem/virtual-file-system";
 import { config } from '../config';
-import tmp from 'tmp';
-import { ImmichAPI } from "./immich-api";
-import { VirtualDirectory } from "../filesystem/virtual-directory";
-import type { VirtualPathInfo } from "../filesystem/virtual-path-info";
-import { VirtualFile } from "../filesystem/virtual-file";
-import { ImmichRootDirectory } from "./collections/immich-root-directory";
-import { VirtualFsUtils } from "../utils/virtual-fs-utils";
-import { logger } from "../logger";
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
-import { ImmichSessionCache } from "./cache/immich-session-cache";
-import { PathUtils } from "../utils/path-utils";
-import { VirtualNode } from "../filesystem/virtual-node";
-import { ImmichVirtualAssetFile } from "./collections/immich-virtual-asset-file";
-import { dirname } from "path";
+import { VirtualDirectory } from "../filesystem/virtual-directory";
+import { VirtualFile } from "../filesystem/virtual-file";
+import { VFSResponse, VirtualFileSystem } from "../filesystem/virtual-file-system";
 import { VirtualMetadata } from "../filesystem/virtual-metadata";
+import type { VirtualPathInfo } from "../filesystem/virtual-path-info";
+import { logger } from "../logger";
+import { PathUtils } from "../utils/path-utils";
+import { VirtualFsUtils } from "../utils/virtual-fs-utils";
+import { ImmichRootDirectory } from "./directories/immich-root-directory";
+import { ImmichAPI } from "./immich-api";
 
-import fs from 'fs';
-import { ImmichUploadItem } from "./immich-api";
-import { ImmichAlbumDirectoryInfo } from './utils/immich-api-utils';
 import path from "path";
 import { DateUtils } from '../utils/date-utils';
+import { ImmichUploadItem } from "./immich-api";
+import { ImmichAlbumDirectoryInfo } from './utils/immich-api-utils';
 
 export class ImmichFileSystem implements VirtualFileSystem
 {
@@ -31,7 +25,7 @@ export class ImmichFileSystem implements VirtualFileSystem
     constructor()
     {
         this.root = new ImmichRootDirectory(this);
-        this.immichApi = new ImmichAPI(config.immichHost.replace(/\/+$/, ''));
+        this.immichApi = new ImmichAPI(config.IMMICH_HOST.replace(/\/+$/, ''));
         this.memory = new ImmichFileSystemMemory(this);
     }
 

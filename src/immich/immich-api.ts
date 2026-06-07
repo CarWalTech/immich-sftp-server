@@ -1,28 +1,27 @@
-import fs from 'fs';
-import path from "path";
-import crypto from 'crypto';
-import tmp from "tmp"
 import axios from "axios";
-import { createWriteStream } from 'fs';
-import isValidFilename from 'valid-filename';
+import crypto from 'crypto';
 import FormData from 'form-data';
+import fs, { createWriteStream } from 'fs';
+import path from "path";
+import tmp from "tmp";
+import isValidFilename from 'valid-filename';
 
-import { ImmichAlbumDirectoryInfo, ImmichTagDirectoryInfo, ImmichTag, mapTagFromApi, applyAlbumDetails, extractCurrentUser, findAlbumNode, getVirtualAlbumTree, ImmichAlbumApiResponse, ImmichUser, mapAlbumFromApi, mapAssetFromApi, getAssetMtime, mapFilesFromAssets, getAlbumsFingerprint } from "./utils/immich-api-utils";
-import { config, UserConfigLoader, UserConfig, SHARED_BUFFER_CACHE_CAP } from "../config";
-import { PathUtils } from "../utils/path-utils";
-import { AlbumMetadataDocumentUtils } from "./utils/immich-metadata-utils";
-import { StringUtils2 } from "../utils/string-utils";
-import { pipeline } from 'stream/promises';
-import { Readable } from "stream";
 import { DateTime } from 'luxon';
-import { ImmichAsset } from "./utils/immich-api-utils";
-import { isObjectWithId } from "../utils/common-utils";
-import { logger } from '../logger';
-import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
-import { ImmichSessionCache } from './cache/immich-session-cache';
-import { ImmichVirtualAssetItem, ImmichVirtualDirectory } from './collections/immich-virtual-directory';
-import { DateUtils } from '../utils/date-utils';
+import { Readable } from "stream";
+import { pipeline } from 'stream/promises';
 import { DownloadSemaphore } from '../classes/download-semaphore';
+import { config, UserConfig, UserConfigLoader } from "../config";
+import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
+import { logger } from '../logger';
+import { isObjectWithId } from "../utils/common-utils";
+import { DateUtils } from '../utils/date-utils';
+import { PathUtils } from "../utils/path-utils";
+import { StringUtils2 } from "../utils/string-utils";
+import { ImmichAssetFileType } from "./files/immich-asset-file";
+import { ImmichSessionCache } from './immich-session-cache';
+import { ImmichVirtualDirectory } from './immich-virtual-directory';
+import { API_USERAGENT, applyAlbumDetails, extractCurrentUser, findAlbumNode, getAlbumsFingerprint, getAssetMtime, getVirtualAlbumTree, ImmichAlbumApiResponse, ImmichAlbumDirectoryInfo, ImmichAsset, ImmichTag, ImmichTagDirectoryInfo, ImmichUser, mapAlbumFromApi, mapAssetFromApi, mapFilesFromAssets, mapTagFromApi, USERNAME_API_KEY, USERNAME_FLAG_SEPERATOR } from "./utils/immich-api-utils";
+import { AlbumMetadataDocumentUtils } from "./utils/immich-metadata-utils";
 
 
 
@@ -38,7 +37,7 @@ export class ImmichAPI
     private readonly baseUrl;
 
     private static readonly sharedBufferCache = new Map<string, VirtualContentBuffer>();
-    private static readonly downloadSemaphore = new DownloadSemaphore(config.maxConcurrentDLs);
+    private static readonly downloadSemaphore = new DownloadSemaphore(config.OPTION_MAX_CONCURRENT_DOWNLOADS);
     private static readonly downloadsInFlight = new Map<string, Promise<VirtualContentBuffer>>();
 
     constructor(immich_url: string)
@@ -52,10 +51,21 @@ export class ImmichAPI
 
     public async login(username: string, password: string)
     {
-        const { trimmedUsername, trimmedView } = this.initUsername(username.trim());
+        const initUsername = (username: string): { trimmedUsername: string; trimmedView: string | null } =>
+        {
+            const lastAt = username.lastIndexOf(USERNAME_FLAG_SEPERATOR);
+            if (lastAt === -1) return { trimmedUsername: username, trimmedView: null };
+
+            const suffix = username.slice(lastAt + 1);
+            if (suffix.includes('.')) return { trimmedUsername: username, trimmedView: null };
+
+            return { trimmedUsername: username.slice(0, lastAt), trimmedView: suffix || null };
+        };
+
+        const { trimmedUsername, trimmedView } = initUsername(username.trim());
         const trimmedPassword = password.trim();
 
-        if (trimmedUsername === 'apikey')
+        if (trimmedUsername === USERNAME_API_KEY)
         {
             const apiKey = trimmedPassword
             if (!apiKey) throw new Error('API key login requires a non-empty API key as password.');
@@ -142,16 +152,7 @@ export class ImmichAPI
             };
         }
     }
-    private initUsername(username: string): { trimmedUsername: string; trimmedView: string | null }
-    {
-        const lastAt = username.lastIndexOf('@');
-        if (lastAt === -1) return { trimmedUsername: username, trimmedView: null };
 
-        const suffix = username.slice(lastAt + 1);
-        if (suffix.includes('.')) return { trimmedUsername: username, trimmedView: null };
-
-        return { trimmedUsername: username.slice(0, lastAt), trimmedView: suffix || null };
-    }
     // #endregion
 
     // #region Get Methods
@@ -181,7 +182,7 @@ export class ImmichAPI
         const extension = path.extname(asset.originalFileName);
         const originalFileName = asset.originalFileName.slice(0, -(extension.length));
         const timestamp = getAssetMtime(asset);
-        const dt = DateTime.fromSeconds(timestamp, { zone: config.immichTimezone });
+        const dt = DateTime.fromSeconds(timestamp, { zone: config.IMMICH_TIMEZONE });
         const formattedTimestamp = `${dt.toFormat('yyyyLLdd_HHmmss')}${String(dt.millisecond).padStart(3, '0')}`;
         const shortId = asset.id.slice(0, 8);
 
@@ -227,7 +228,7 @@ export class ImmichAPI
                     timeout: 30_000,
                     headers: {
                         ...(isDownload ? {} : { 'Accept': 'application/json' }),
-                        'User-Agent': 'ImmichNetworkStorage (Linux)',
+                        'User-Agent': API_USERAGENT,
                         ...(this.authMode === 'api-key'
                             ? { 'x-api-key': this.immichAccessToken }
                             : { 'Authorization': `Bearer ${this.immichAccessToken}` }),
@@ -454,7 +455,7 @@ export class ImmichAPI
             }
         });
     }
-    public async FETCH_AssetsForNonAlbums(parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetItem[]>
+    public async FETCH_AssetsForNonAlbums(parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichAssetFileType[]>
     {
         const cacheKey = parent.fullpath;
 
@@ -470,7 +471,7 @@ export class ImmichAPI
             buildFiles: (assets, settings) => mapFilesFromAssets(assets, parent, reserved_names, settings.assetSidecarsEnabled)
         }, this.userSettings);
     }
-    public async FETCH_AssetsForTrash(parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetItem[]>
+    public async FETCH_AssetsForTrash(parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichAssetFileType[]>
     {
         const cacheKey = parent.fullpath;
 
@@ -487,7 +488,7 @@ export class ImmichAPI
             buildFiles: (assets, settings) => mapFilesFromAssets(assets, parent, reserved_names, settings.assetSidecarsEnabled)
         }, this.userSettings);
     }
-    public async FETCH_AssetsForAlbum(album: ImmichAlbumDirectoryInfo, parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetItem[]>
+    public async FETCH_AssetsForAlbum(album: ImmichAlbumDirectoryInfo, parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichAssetFileType[]>
     {
         const cacheKey = parent.fullpath;
 
@@ -518,7 +519,7 @@ export class ImmichAPI
             buildFiles: (assets, settings) => mapFilesFromAssets(assets, parent, reserved_names, settings.assetSidecarsEnabled)
         }, this.userSettings);
     }
-    public async FETCH_AssetsForTag(tag: ImmichTagDirectoryInfo, parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichVirtualAssetItem[]>
+    public async FETCH_AssetsForTag(tag: ImmichTagDirectoryInfo, parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichAssetFileType[]>
     {
         const cacheKey = parent.fullpath;
         return await this.cache.fetchCachedAssetLists(cacheKey, {
@@ -706,7 +707,7 @@ export class ImmichAPI
             let isTrashed = false;
             let assetId: string | undefined;
 
-            if (config.enableUploadValidation)
+            if (config.OPTION_ENABLE_UPLOAD_VALIDATION)
             {
                 const bulkCheckResponse = await this.SERVER_ValidateUpload(checksum, filename);
                 const result = bulkCheckResponse.results[0];
@@ -724,7 +725,7 @@ export class ImmichAPI
             if (action === "accept")
             {
                 const data = new FormData();
-                const iso = DateTime.fromSeconds(mtime, { zone: config.immichTimezone }).toJSDate().toISOString();
+                const iso = DateTime.fromSeconds(mtime, { zone: config.IMMICH_TIMEZONE }).toJSDate().toISOString();
 
                 data.append('fileModifiedAt', iso);
                 data.append('fileCreatedAt', iso);
@@ -884,7 +885,7 @@ export class ImmichAPI
             }
         }
 
-        if (config.enableLocalFiles)
+        if (config.OPTION_ENABLE_LOCAL_FILES)
         {
             const filepath = "/immich" + asset.originalPath;
             const stats = fs.statSync(filepath)
@@ -959,7 +960,7 @@ export class ImmichAPI
 
         // 2. Local file mode — async read to avoid blocking the event loop.
         //    Buffer is cached so subsequent accesses (multiple connections, re-reads) are instant.
-        if (config.enableLocalFiles)
+        if (config.OPTION_ENABLE_LOCAL_FILES)
         {
             const filepath = "/immich" + asset.originalPath;
             const data = await fs.promises.readFile(filepath);
@@ -1042,7 +1043,7 @@ export class ImmichAPI
             logger.debug(`ImmichAPI`, 'SERVER_ReadAsset', `Downloading ${asset.id} via ${endpoint}, Content-Length=${contentLength}`);
 
             let node: VirtualContentBuffer;
-            if (contentLength > config.maxCacheBufferSize)
+            if (contentLength > config.OPTION_MAX_CACHE_BUFFER)
             {
                 // Large file — stream to a tmp file to avoid heap pressure.
                 const tmpFile = tmp.fileSync();
@@ -1092,7 +1093,7 @@ export class ImmichAPI
     async SERVER_UploadNode(path: string, node: VirtualContentBuffer, mtime: number)
     {
         const data = new FormData();
-        const iso = DateTime.fromSeconds(mtime, { zone: config.immichTimezone }).toJSDate().toISOString();
+        const iso = DateTime.fromSeconds(mtime, { zone: config.IMMICH_TIMEZONE }).toJSDate().toISOString();
 
         data.append('fileModifiedAt', iso);
         data.append('fileCreatedAt', iso);
@@ -1207,7 +1208,7 @@ export class ImmichAPI
             // Re-promote existing entry (size unchanged, just move to MRU)
             ImmichAPI.sharedBufferCache.delete(id);
         }
-        else if (ImmichAPI.sharedBufferCache.size >= SHARED_BUFFER_CACHE_CAP)
+        else if (ImmichAPI.sharedBufferCache.size >= config.OPTION_SHARED_BUFFER_CACHE_CAP)
         {
             // Evict LRU (first entry in Map iteration order)
             const oldest = ImmichAPI.sharedBufferCache.keys().next().value;

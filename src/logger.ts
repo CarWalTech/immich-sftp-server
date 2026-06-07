@@ -1,7 +1,5 @@
-import path from "path";
-import { BaseLogger, ILogObjMeta, ISettingsParam, ILogObj, Logger } from "tslog";
-import { getEnvBoolean } from "./utils/env-utils";
 import { createStream } from "rotating-file-stream";
+import { BaseLogger, ILogObjMeta, ISettingsParam } from "tslog";
 import { config } from "./config";
 
 
@@ -98,35 +96,35 @@ export class CustomLogger<LogObj> extends BaseLogger<LogObj>
 
     public debug(...args: unknown[]): LogObj & ILogObjMeta | undefined
     {
-        if (config.ENABLE_DEBUG_LOGS == false) return;
+        if (config.LOGS_DEBUG == false) return;
         if (this.is_ignored(args)) return;
         args = this.format_args(args)
         return super.log(2, "DEBUG", ...args);
     }
     public info(...args: unknown[]): LogObj & ILogObjMeta | undefined
     {
-        if (config.ENABLE_INFO_LOGS == false) return;
+        if (config.LOGS_INFO == false) return;
         if (this.is_ignored(args)) return;
         args = this.format_args(args)
         return super.log(3, "INFO", ...args);
     }
     public warn(...args: unknown[]): LogObj & ILogObjMeta | undefined
     {
-        if (config.ENABLE_WARN_LOGS == false) return;
+        if (config.LOGS_WARN == false) return;
         if (this.is_ignored(args)) return;
         args = this.format_args(args)
         return super.log(4, "WARN", ...args);
     }
     public error(...args: unknown[]): LogObj & ILogObjMeta | undefined
     {
-        if (config.ENABLE_ERROR_LOGS == false) return;
+        if (config.LOGS_ERROR == false) return;
         if (this.is_ignored(args)) return;
         args = this.format_args(args)
         return super.log(5, "ERROR", ...args);
     }
     public explicit(...args: unknown[]): LogObj & ILogObjMeta | undefined
     {
-        if (config.ENABLE_EXPLICIT_LOGS == false) return;
+        if (config.LOGS_EXPLICIT == false) return;
         if (this.is_ignored(args)) return;
         args = this.format_args(args)
         return super.log(6, "EXPLICIT", ...args)
