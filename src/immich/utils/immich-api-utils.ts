@@ -1,6 +1,6 @@
 import { logger } from "../../logger";
 import { isObject } from "../../utils/common-utils";
-import { DateUtils } from "../../utils/date-utils";
+import { Timestamp } from "../../utils/date-utils";
 import { PathUtils } from "../../utils/path-utils";
 import { ImmichAssetFile, ImmichAssetFileType, ImmichAssetSidecarFile } from "../files/immich-asset-file";
 import { ImmichVirtualDirectory } from "../immich-virtual-directory";
@@ -204,40 +204,18 @@ export function getVirtualAlbumTree(albums: ImmichAlbumDirectoryInfo[], seperato
 
     return root;
 }
-export function getAlbumMtime(album: ImmichAlbumBase): number
+export function getAlbumMtime(album: ImmichAlbumBase): Timestamp
 {
-    const updatedTimestamp = album.updatedAt ? new Date(album.updatedAt).getTime() : NaN;
-    if (Number.isFinite(updatedTimestamp) && updatedTimestamp > 0)
-    {
-        return Math.floor(updatedTimestamp / 1000);
-    }
+    const updatedTimestamp = Timestamp.fromNullableString(album.updatedAt);
+    if (updatedTimestamp) return updatedTimestamp
 
-    const createdTimestamp = album.createdAt ? new Date(album.createdAt).getTime() : NaN;
-    if (Number.isFinite(createdTimestamp) && createdTimestamp > 0)
-    {
-        return Math.floor(createdTimestamp / 1000);
-    }
+    const createdTimestamp = Timestamp.fromNullableString(album.createdAt);
+    if (createdTimestamp) return createdTimestamp
 
     logger.warn('ImmichAlbumUtils', 'getAlbumMtime', 'warn', `Album '${album.albumName}' (ID: ${album.id}) has missing/invalid createdAt and updatedAt timestamps, using current time as mtime fallback.`);
-    return DateUtils.getTimestampNow();
+    return Timestamp.now();
 }
-export function getTagMtime(album: ImmichTag): number
-{
-    const updatedTimestamp = album.updatedAt ? new Date(album.updatedAt).getTime() : NaN;
-    if (Number.isFinite(updatedTimestamp) && updatedTimestamp > 0)
-    {
-        return Math.floor(updatedTimestamp / 1000);
-    }
 
-    const createdTimestamp = album.createdAt ? new Date(album.createdAt).getTime() : NaN;
-    if (Number.isFinite(createdTimestamp) && createdTimestamp > 0)
-    {
-        return Math.floor(createdTimestamp / 1000);
-    }
-
-    logger.warn("ImmichTagUtils", "getTagMtime", `Tag '${album.value}' (ID: ${album.id}) has missing/invalid createdAt and updatedAt timestamps, using current time as mtime fallback.`)
-    return DateUtils.getTimestampNow();
-}
 export function getVirtualTagTree(tags: ImmichTag[]): ImmichTagsDirectoryNode
 {
     const root: ImmichTagsDirectoryNode = {
@@ -279,21 +257,18 @@ export function getVirtualTagTree(tags: ImmichTag[]): ImmichTagsDirectoryNode
 
     return root;
 }
-export function getAssetMtime(asset: ImmichAsset): number
+export function getAssetMtime(asset: ImmichAsset): Timestamp
 {
     // Prefer Immich server-maintained timestamps first, then fall back to uploaded file timestamps.
     const candidates = [asset.updatedAt, asset.createdAt, asset.fileModifiedAt, asset.fileCreatedAt];
     for (const value of candidates)
     {
-        const timestamp = value ? new Date(value).getTime() : NaN;
-        if (Number.isFinite(timestamp) && timestamp > 0)
-        {
-            return Math.floor(timestamp / 1000);
-        }
+        const timestamp = Timestamp.fromNullableString(value);
+        if (timestamp) return timestamp
     }
 
     logger.warn('ImmichAssetUtils', 'getAssetMtime', `Asset '${asset.originalFileName}' (ID: ${asset.id}) has missing/invalid timestamps, using current time fallback.`);
-    return DateUtils.getTimestampNow();
+    return Timestamp.now();
 }
 export function getAlbumsFingerprint(albums: ImmichAlbumDirectoryInfo[]): string
 {

@@ -5,7 +5,7 @@ import { VirtualDirectory } from "../../filesystem/virtual-directory";
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { VirtualNode } from "../../filesystem/virtual-node";
 import { logger } from "../../logger";
-import { DateUtils } from "../../utils/date-utils";
+import { Timestamp } from "../../utils/date-utils";
 import { ImmichFileSystem } from "../immich-file-system";
 import { ImmichVirtualFile } from "../immich-virtual-file";
 import { FILENAME_FILESYSTEM_OPTIONS } from "../utils/immich-fs-utils";
@@ -53,7 +53,7 @@ export class ImmichRootDirectory extends VirtualDirectory
 
     async event_stat(): Promise<VirtualMetadata>
     {
-        return VirtualMetadata.directory_ro(this.name, DateUtils.getTimestampNow());
+        return VirtualMetadata.directory_ro(this.name, this.mtime);
     }
 
     async event_rebuild()
@@ -103,7 +103,7 @@ export class ImmichRootMetadataFile extends ImmichVirtualFile
     async event_stat(): Promise<VirtualMetadata>
     {
         const metadata = UserConfigLoader.load_user_json(this.file_system.getCurrentUser()?.id, this.file_system.getCurrentUserView());
-        return VirtualMetadata.file_rw(this.name, Buffer.byteLength(metadata, 'utf8'), DateUtils.getTimestampNow());
+        return VirtualMetadata.file_rw(this.name, Buffer.byteLength(metadata, 'utf8'), Timestamp.now());
     }
     async event_readfile(): Promise<VirtualContentBuffer>
     {

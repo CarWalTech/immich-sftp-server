@@ -9,7 +9,7 @@ import { VirtualFileSystem } from '../filesystem/virtual-file-system';
 import { VirtualMetadata } from '../filesystem/virtual-metadata';
 import { ImmichFileSystem } from '../immich/immich-file-system';
 import { logger } from '../logger';
-import { DateUtils } from '../utils/date-utils';
+import { Timestamp } from '../utils/date-utils';
 import { TransferProtocolServer } from './transfer-protocol-server';
 
 // #region TCP Receivers
@@ -842,13 +842,13 @@ async function processReadDirQueue(entry: SftpHandleEntry, key: string, self: Sf
 
       // Inject any Phase 1 placeholders that belong to this directory so the
       // client sees the file it just created before sending Phase 2 data.
-      const now = Date.now();
+      const now = Timestamp.now();
       const pendingInDir: VirtualMetadata[] = [];
       for (const [pendingPath, expiry] of self.phaseOnePending)
       {
-        if (expiry <= now) { self.phaseOnePending.delete(pendingPath); continue; }
+        if (expiry <= now.value(false)) { self.phaseOnePending.delete(pendingPath); continue; }
         if (path.posix.dirname(pendingPath) === entry.path)
-          pendingInDir.push(VirtualMetadata.file_rw(path.posix.basename(pendingPath), 0, now / 1000));
+          pendingInDir.push(VirtualMetadata.file_rw(path.posix.basename(pendingPath), 0, now));
       }
 
       entry.files = [...dotEntries, ...realFiles, ...pendingInDir]
@@ -933,7 +933,7 @@ function normalizePath(p: string): string
 }
 function createFileAttributes(size: number): Attributes
 {
-  const now = DateUtils.getTimestampNow();
+  const now = Timestamp.currentTime();
   return {
     mode: 0o100644,
     uid: 0,
@@ -945,7 +945,7 @@ function createFileAttributes(size: number): Attributes
 }
 function createFolderAttributes(): Attributes
 {
-  const now = DateUtils.getTimestampNow();
+  const now = Timestamp.currentTime();
   return {
     mode: 0o040755,
     uid: 0,

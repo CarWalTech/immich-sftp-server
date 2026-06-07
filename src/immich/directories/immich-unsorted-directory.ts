@@ -2,7 +2,6 @@
 import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { VirtualNode } from "../../filesystem/virtual-node";
-import { DateUtils } from "../../utils/date-utils";
 import { ImmichAssetFile } from "../files/immich-asset-file";
 import { ImmichFileSystem } from "../immich-file-system";
 import { ImmichVirtualDirectory } from "../immich-virtual-directory";
@@ -23,7 +22,7 @@ export class ImmichRootUnsortedDirectory extends ImmichVirtualDirectory
     }
     async event_stat(): Promise<VirtualMetadata>
     {
-        return VirtualMetadata.directory_rw(this.name, DateUtils.getTimestampNow())
+        return VirtualMetadata.directory_rw(this.name, this.mtime)
     }
     async event_mkdir(filename: string): Promise<boolean>
     {

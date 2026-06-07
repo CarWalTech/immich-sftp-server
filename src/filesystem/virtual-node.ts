@@ -1,14 +1,15 @@
 // prettier-ignore
-import { VirtualMetadata } from './virtual-metadata';
+import { Timestamp } from '../utils/date-utils';
 import { VirtualContentBuffer } from "./virtual-content-buffer";
+import { VirtualMetadata } from './virtual-metadata';
 
 export abstract class VirtualNode
 {
     public name: string
-    public mtime: number
+    public mtime: Timestamp
     public parent: VirtualNode | null
 
-    constructor(name: string, mtime: number = Date.now(), parent: VirtualNode | null = null)
+    constructor(name: string, mtime: Timestamp = Timestamp.now(), parent: VirtualNode | null = null)
     {
         this.name = name
         this.mtime = mtime

@@ -1,5 +1,5 @@
 import { FileEntry } from "ssh2";
-import { DateUtils } from "../utils/date-utils";
+import { Timestamp } from "../utils/date-utils";
 
 export class VirtualMetadata
 {
@@ -85,84 +85,84 @@ export class VirtualMetadata
     }
 
     /** Regular file, read-write */
-    public static file_rw(name: string, size: number, mtime?: number): VirtualMetadata
+    public static file_rw(name: string, size: number, mtime?: Timestamp): VirtualMetadata
     {
-        if (!mtime) mtime = DateUtils.getTimestampNow()
+        if (!mtime) mtime = Timestamp.now()
         return new VirtualMetadata(
             name,
             false,
             size,
-            mtime,
+            mtime.value(),
             VirtualMetadata.MODE_FILE,
             0,
             0,
-            mtime
+            mtime.value()
             //0o100644 // rw-r--r--
         );
     }
 
     /** Regular file, read-only */
-    public static file_ro(name: string, size: number, mtime?: number): VirtualMetadata
+    public static file_ro(name: string, size: number, mtime?: Timestamp): VirtualMetadata
     {
-        if (!mtime) mtime = DateUtils.getTimestampNow()
+        if (!mtime) mtime = Timestamp.now()
         return new VirtualMetadata(
             name,
             false,
             size,
-            mtime,
+            mtime.value(),
             VirtualMetadata.MODE_FILE,
             0,
             0,
-            mtime
+            mtime.value()
             //0o100444 // r--r--r--
         );
     }
 
     /** Directory, read-write */
-    public static directory_rw(name: string, mtime?: number): VirtualMetadata
+    public static directory_rw(name: string, mtime?: Timestamp): VirtualMetadata
     {
-        if (!mtime) mtime = DateUtils.getTimestampNow()
+        if (!mtime) mtime = Timestamp.now()
         return new VirtualMetadata(
             name,
             true,
             0,
-            mtime,
+            mtime.value(),
             VirtualMetadata.MODE_DIR,
             0,
             0,
-            mtime
+            mtime.value()
         );
     }
 
     /** Directory, read-only */
-    public static directory_ro(name: string, mtime?: number): VirtualMetadata
+    public static directory_ro(name: string, mtime?: Timestamp): VirtualMetadata
     {
-        if (!mtime) mtime = DateUtils.getTimestampNow()
+        if (!mtime) mtime = Timestamp.now()
         return new VirtualMetadata(
             name,
             true,
             0,
-            mtime,
+            mtime.value(),
             VirtualMetadata.MODE_DIR_READONLY,
             0,
             0,
-            mtime
+            mtime.value()
         );
     }
 
     /** Unknown node type — safest fallback */
     public static unknown(name: string): VirtualMetadata
     {
-        const now = DateUtils.getTimestampNow()
+        const now = Timestamp.now()
         return new VirtualMetadata(
             name,
             false,
             0,
-            now,
+            now.value(),
             VirtualMetadata.MODE_FILE,
             0,
             0,
-            now
+            now.value()
         );
     }
 }

@@ -12,7 +12,7 @@ import { ImmichRootDirectory } from "./directories/immich-root-directory";
 import { ImmichAPI } from "./immich-api";
 
 import path from "path";
-import { DateUtils } from '../utils/date-utils';
+import { Timestamp } from '../utils/date-utils';
 import { ImmichUploadItem } from "./immich-api";
 import { ImmichAlbumDirectoryInfo } from './utils/immich-api-utils';
 
@@ -291,7 +291,7 @@ export class ImmichFileSystemMemory
             const name = parts[parts.length - 1];
 
             if (dir !== currentDir) continue;
-            entriesMap.set(name, VirtualMetadata.file_rw(name, 0, new Date().getTime() / 1000));
+            entriesMap.set(name, VirtualMetadata.file_rw(name, 0, Timestamp.now()));
         }
 
         for (const entry of this.entries_tmp)
@@ -301,7 +301,7 @@ export class ImmichFileSystemMemory
             const name = parts[parts.length - 1];
 
             if (dir !== currentDir) continue;
-            entriesMap.set(name, VirtualMetadata.file_rw(name, 0, new Date().getTime() / 1000));
+            entriesMap.set(name, VirtualMetadata.file_rw(name, 0, Timestamp.now()));
         }
 
         return [...entriesMap.values()];
@@ -354,7 +354,7 @@ export class ImmichFileSystemMemory
 
         // Upload is now triggered directly by writeFile → flushQueued.
         // stat() just confirms the file is known so the client gets a sensible response.
-        return VirtualMetadata.file_rw(filename, 0, new Date().getTime() / 1000);
+        return VirtualMetadata.file_rw(filename, 0, Timestamp.now());
     }
 
     /**
@@ -371,7 +371,7 @@ export class ImmichFileSystemMemory
         const queueItem = this.entries[index];
         try
         {
-            await this.immich_fs.getApi().QUEUE_UploadFile(queueItem, DateUtils.getTimestampNow());
+            await this.immich_fs.getApi().QUEUE_UploadFile(queueItem, Timestamp.currentTime());
         }
         finally
         {

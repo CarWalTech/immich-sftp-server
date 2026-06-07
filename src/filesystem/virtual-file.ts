@@ -1,16 +1,14 @@
-import tmp from "tmp";
-import { VirtualContentBufferUtils } from "./virtual-content-buffer";
-import { VirtualNode } from "./virtual-node";
-import { VirtualContentBuffer } from "./virtual-content-buffer";
-import { VirtualMetadata } from './virtual-metadata';
 import { logger } from "../logger";
-import { DateUtils } from "../utils/date-utils";
+import { Timestamp } from "../utils/date-utils";
+import { VirtualContentBuffer, VirtualContentBufferUtils } from "./virtual-content-buffer";
+import { VirtualMetadata } from './virtual-metadata';
+import { VirtualNode } from "./virtual-node";
 
 export class VirtualFile extends VirtualNode
 {
 
 
-    constructor(name: string, mtime: number = Date.now(), public parent: VirtualNode | null = null)
+    constructor(name: string, mtime: Timestamp = Timestamp.now(), public parent: VirtualNode | null = null)
     {
         super(name, mtime, parent);
     }
@@ -50,7 +48,7 @@ export class VirtualFile extends VirtualNode
     async event_stat(): Promise<VirtualMetadata>
     {
         const size = await this.get_size();
-        return VirtualMetadata.file_rw(this.name, size, DateUtils.getTimestampNow());
+        return VirtualMetadata.file_rw(this.name, size, this.mtime);
     }
     async event_rename(new_name: string): Promise<boolean>
     {

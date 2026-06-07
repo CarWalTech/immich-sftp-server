@@ -3,7 +3,7 @@ import { VirtualContentBufferUtils } from "../../filesystem/virtual-content-buff
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
 import { VirtualMetadata } from "../../filesystem/virtual-metadata";
 import { VirtualNode } from "../../filesystem/virtual-node";
-import { DateUtils } from "../../utils/date-utils";
+import { Timestamp } from "../../utils/date-utils";
 import { ImmichAssetFile } from "../files/immich-asset-file";
 import { ImmichFileSystem } from "../immich-file-system";
 import { ImmichVirtualDirectory } from "../immich-virtual-directory";
@@ -61,7 +61,7 @@ export class ImmichDigikamTrashDirectory extends ImmichVirtualDirectory
 
     async event_stat(): Promise<VirtualMetadata>
     {
-        return VirtualMetadata.directory_rw(this.name);
+        return VirtualMetadata.directory_rw(this.name, this.mtime);
     }
 
     async event_mkdir(_: string): Promise<boolean>
@@ -92,7 +92,7 @@ export class ImmichDigikamFilesDirectory extends ImmichVirtualDirectory
 
     async event_stat(): Promise<VirtualMetadata>
     {
-        return VirtualMetadata.directory_rw(this.name);
+        return VirtualMetadata.directory_rw(this.name, this.mtime);
     }
 
     async event_mkdir(_: string): Promise<boolean>
@@ -149,7 +149,7 @@ export class ImmichDigikamInfoDirectory extends ImmichVirtualDirectory
 
     async event_stat(): Promise<VirtualMetadata>
     {
-        return VirtualMetadata.directory_ro(this.name);
+        return VirtualMetadata.directory_ro(this.name, this.mtime);
     }
 
     async event_mkdir(_: string): Promise<boolean>
@@ -174,7 +174,7 @@ class ImmichDigikamUuidFile extends ImmichVirtualFile
 
     async event_stat(): Promise<VirtualMetadata>
     {
-        return VirtualMetadata.file_ro(this.name, Buffer.byteLength(this.content, 'utf8'), DateUtils.getTimestampNow());
+        return VirtualMetadata.file_ro(this.name, Buffer.byteLength(this.content, 'utf8'), Timestamp.now());
     }
 
     async event_readfile()

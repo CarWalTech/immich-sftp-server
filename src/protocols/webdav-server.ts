@@ -13,7 +13,7 @@ import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
 import { VirtualFileSystem } from '../filesystem/virtual-file-system';
 import { ImmichFileSystem } from '../immich/immich-file-system';
 import { logger } from '../logger';
-import { DateUtils } from '../utils/date-utils';
+import { Timestamp } from '../utils/date-utils';
 import { TransferProtocolServer } from './transfer-protocol-server';
 
 // ──────────────────────────────────────────────────────────────
@@ -149,7 +149,7 @@ class WebdavUploadStream extends Writable
         await this.fsBackend.writeFile(this.targetPath, new VirtualContentBuffer(this.tmpFile));
         await this.fsBackend.setAttributes(
           this.targetPath,
-          DateUtils.getTimestampNow(),
+          Timestamp.currentTime(),
         );
         this.completed = true;
         cb();

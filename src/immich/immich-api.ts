@@ -182,7 +182,7 @@ export class ImmichAPI
         const extension = path.extname(asset.originalFileName);
         const originalFileName = asset.originalFileName.slice(0, -(extension.length));
         const timestamp = getAssetMtime(asset);
-        const dt = DateTime.fromSeconds(timestamp, { zone: config.IMMICH_TIMEZONE });
+        const dt = timestamp.datetime(config.IMMICH_TIMEZONE);
         const formattedTimestamp = `${dt.toFormat('yyyyLLdd_HHmmss')}${String(dt.millisecond).padStart(3, '0')}`;
         const shortId = asset.id.slice(0, 8);
 

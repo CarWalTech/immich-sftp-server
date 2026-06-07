@@ -3,7 +3,7 @@ import { VirtualContentBuffer, VirtualContentBufferUtils } from '../../filesyste
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { VirtualNode } from "../../filesystem/virtual-node";
 import { logger } from '../../logger';
-import { DateUtils } from "../../utils/date-utils";
+import { Timestamp } from "../../utils/date-utils";
 import { ImmichAssetFile } from '../files/immich-asset-file';
 import { ImmichWebLinkFile } from "../files/immich-web-link-file";
 import { ImmichFileSystem } from "../immich-file-system";
@@ -16,14 +16,37 @@ import { ImmichRootDirectory } from "./immich-root-directory";
 
 export class ImmichAlbumsDirectory extends ImmichVirtualDirectory
 {
+    private _cached_tree: ImmichAlbumsDirectoryNode | null = null;
+
     constructor(file_system: ImmichFileSystem, root: ImmichRootDirectory)
     {
         super(file_system, DIRNAME_ALBUMS, undefined, root, { refreshOnReadDir: true })
     }
 
+    public get_latest_album_modtime(): Timestamp
+    {
+        if (!this._cached_tree) return this.mtime;
+
+        const descendants: ImmichAlbumDirectoryInfo[] = [];
+        getDesecendantAlbums(this._cached_tree, descendants);
+        if (descendants.length > 0)
+        {
+            return descendants.reduce<Timestamp>(
+                (latest, album) =>
+                {
+                    const t = getAlbumMtime(album);
+                    return t.value() > latest.value() ? t : latest;
+                },
+                getAlbumMtime(descendants[0])
+            );
+        }
+
+        return this.mtime;
+    }
+
     async event_stat(): Promise<VirtualMetadata>
     {
-        return VirtualMetadata.directory_ro(this.name, DateUtils.getTimestampNow())
+        return VirtualMetadata.directory_ro(this.name, this.get_latest_album_modtime())
     }
     async event_mkdir(albumName: string): Promise<boolean>
     {
@@ -35,6 +58,7 @@ export class ImmichAlbumsDirectory extends ImmichVirtualDirectory
     {
         const current_file_tree = await this.file_system.getApi().FETCH_AlbumVirtualTree();
         if (!current_file_tree) return new Map()
+        this._cached_tree = current_file_tree;
         return new Map([...current_file_tree.children.values()].map(node => ([node.fsName, new ImmichAlbumFolder(this.file_system, this, this, node)])))
     }
 }
@@ -83,14 +107,29 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
         throw new Error("Invalid album folder parent");
 
     }
-    public get_album_modtime()
+    public get_album_modtime(): Timestamp
     {
         if (this.node_data.album)
         {
             return getAlbumMtime(this.node_data.album);
         }
 
-        return DateUtils.getDateNow();
+        // Virtual folder (no album bound): use the latest mtime from descendant albums
+        const descendants: ImmichAlbumDirectoryInfo[] = [];
+        getDesecendantAlbums(this.node_data, descendants);
+        if (descendants.length > 0)
+        {
+            return descendants.reduce<Timestamp>(
+                (latest, album) =>
+                {
+                    const t = getAlbumMtime(album);
+                    return t.value() > latest.value() ? t : latest;
+                },
+                getAlbumMtime(descendants[0])
+            );
+        }
+
+        return this.mtime;
     }
 
     async event_rename(new_name: string): Promise<boolean>

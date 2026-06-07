@@ -2,16 +2,10 @@ import { DateTime } from "luxon"
 
 export class DateUtils
 {
-    public static getDateNow()
-    {
-        return Date.now()
-    }
-
     public static getEarliestTimeStringISO()
     {
-        return this.getTimeStringISO(DateTime.local(1990, 1, 1, 0, 0, 0, 0))
+        return this.getTimeStringISO(DateTime.local(1970, 1, 1, 0, 0, 0, 0))
     }
-
     public static getTimeStringISO(time: DateTime)
     {
         return time.toJSDate().toISOString()
@@ -20,19 +14,50 @@ export class DateUtils
     {
         return DateTime.now().toJSDate().toISOString()
     }
+}
 
-    public static getTimestampNow()
+export class Timestamp
+{
+    private raw: number
+
+    constructor(input: number)
+    {
+        this.raw = input
+    }
+
+    static now()
+    {
+        return new Timestamp(Date.now())
+    }
+
+    static currentTime()
     {
         return Math.floor(Date.now() / 1000)
     }
-    public static getTimestampOrNow(value?: string): number
+
+    static fromNullableString(value?: string)
     {
         const parsed = value ? Date.parse(value) : Number.NaN;
-        if (!Number.isFinite(parsed) || parsed <= 0)
-        {
-            return this.getTimestampNow();
-        }
-        return Math.floor(parsed / 1000);
+        if (!Number.isFinite(parsed) || parsed <= 0) return null
+        return new Timestamp(parsed)
+    }
+
+    static fromString(value?: string)
+    {
+        const parsed = value ? Date.parse(value) : Number.NaN;
+        if (!Number.isFinite(parsed) || parsed <= 0) return Timestamp.now()
+        return new Timestamp(parsed);
+    }
+
+    datetime(tz: string)
+    {
+        return DateTime.fromSeconds(this.value(), { zone: tz });
+    }
+
+    value(floored: boolean = false)
+    {
+        if (floored) return this.raw;
+        return Math.floor(this.raw / 1000);
     }
 }
 

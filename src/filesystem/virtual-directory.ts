@@ -1,11 +1,8 @@
-import tmp from "tmp";
-import { VirtualFile } from "./virtual-file";
-import { VirtualNode } from "./virtual-node";
+import { logger } from "../logger";
+import { Timestamp } from "../utils/date-utils";
 import { VirtualContentBuffer } from "./virtual-content-buffer";
 import { VirtualMetadata } from './virtual-metadata';
-import { logger } from "../logger";
-import { DateUtils } from "../utils/date-utils";
-
+import { VirtualNode } from "./virtual-node";
 export type VirtualDirectoryMoveItemFn = (item: VirtualNode, container: VirtualDirectory) => boolean;
 export type VirtualDirectoryOptions = { sendFn?: VirtualDirectoryMoveItemFn, recieveFn?: VirtualDirectoryMoveItemFn, refreshOnMove?: boolean, refreshOnReadDir?: boolean }
 
@@ -19,7 +16,7 @@ export class VirtualDirectory extends VirtualNode
     private _refreshOnReadDir: boolean = false
     private _rebuildPromise: Promise<Map<string, VirtualNode>> | null = null;
 
-    constructor(name: string, mtime: number = Date.now(), parent: VirtualNode | null = null, options?: VirtualDirectoryOptions)
+    constructor(name: string, mtime: Timestamp = Timestamp.now(), parent: VirtualNode | null = null, options?: VirtualDirectoryOptions)
     {
         super(name, mtime, parent);
         if (options)
@@ -118,7 +115,7 @@ export class VirtualDirectory extends VirtualNode
     }
     async event_stat(): Promise<VirtualMetadata>
     {
-        return VirtualMetadata.directory_rw(this.name, DateUtils.getTimestampNow());
+        return VirtualMetadata.directory_rw(this.name, this.mtime);
     }
     async event_rename(new_name: string): Promise<boolean>
     {

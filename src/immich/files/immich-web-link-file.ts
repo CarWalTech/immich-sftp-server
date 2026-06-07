@@ -2,7 +2,7 @@ import { VirtualContentBuffer, VirtualContentBufferUtils } from "../../filesyste
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { logger } from "../../logger";
-import { DateUtils } from "../../utils/date-utils";
+import { Timestamp } from "../../utils/date-utils";
 import { ImmichFileSystem } from "../immich-file-system";
 import { ImmichVirtualFile } from "../immich-virtual-file";
 import { FILENAME_OPEN_IN_IMMICH } from '../utils/immich-fs-utils';
@@ -23,7 +23,7 @@ export class ImmichWebLinkFile extends ImmichVirtualFile
 
     async event_getmodtime()
     {
-        return DateUtils.getTimestampNow()
+        return Timestamp.now()
     }
 
     async event_readlink()

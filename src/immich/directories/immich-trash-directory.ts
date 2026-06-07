@@ -1,6 +1,6 @@
 import { VirtualMetadata } from "../../filesystem/virtual-metadata";
 import { VirtualNode } from "../../filesystem/virtual-node";
-import { DateUtils } from "../../utils/date-utils";
+import { Timestamp } from "../../utils/date-utils";
 import { ImmichAssetFile } from "../files/immich-asset-file";
 import { ImmichWebLinkFile } from "../files/immich-web-link-file";
 import { ImmichFileSystem } from "../immich-file-system";
@@ -34,7 +34,7 @@ export class ImmichRootTrashDirectory extends ImmichVirtualDirectory
     }
     async event_stat(): Promise<VirtualMetadata>
     {
-        return VirtualMetadata.directory_rw(this.name);
+        return VirtualMetadata.directory_rw(this.name, this.mtime);
     }
     async event_mkdir(filename: string): Promise<boolean>
     {
@@ -83,7 +83,7 @@ export class ImmichTrashLinkFile extends ImmichWebLinkFile
 
     async event_getmodtime()
     {
-        return DateUtils.getTimestampNow();
+        return Timestamp.now();
     }
 
     async event_readlink()
