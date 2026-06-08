@@ -368,6 +368,17 @@ export class ImmichAPI
 
     // #region Fetch Methods
 
+    // Like FETCH_Asset but guarantees tags are populated.  The search API may omit
+    // the tags field; this clears the cache entry in that case so FETCH_Asset does
+    // a full GET /api/assets/{id} which always includes tags.
+    public async FETCH_AssetWithTags(asset_id: string): Promise<ImmichAsset>
+    {
+        const cached = this.cache.assetInfoCache.get(asset_id);
+        if (cached && cached.data.tags === undefined)
+            this.cache.assetInfoCache.delete(asset_id);
+        return this.FETCH_Asset(asset_id);
+    }
+
     public async FETCH_Asset(asset_id: string): Promise<ImmichAsset>
     {
         let fetched: ImmichAsset | null = null;
@@ -1231,6 +1242,14 @@ export class ImmichAPI
     public CACHE_InvalidateTree()
     {
         this.cache.invalidateTree()
+    }
+
+    // Lighter post-XMP-write invalidation: keeps the asset visible in directory
+    // listings (assetInfoCache entry preserved) but marks tags stale and evicts
+    // the rendered XMP so the next read triggers a fresh fetch.
+    public CACHE_InvalidateAssetXMP(assetId: string)
+    {
+        this.cache.invalidateAssetXMP(assetId);
     }
 
     public CACHE_InvalidateFilepath(path: string)

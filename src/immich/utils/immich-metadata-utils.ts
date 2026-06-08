@@ -359,11 +359,12 @@ export function generateAssetMetadataDocument(asset: ImmichAsset, existingSideca
     if (country) descNode['photoshop:Country'] = country;
 
     // ── Apply Immich tag fields (always authoritative, even when empty) ────────
-    // dc:subject: leaf-only paths (ancestor tags Immich stores separately are dropped)
+    // dc:subject: plain leaf names (DigiKam standard — no path separators).
+    // lr:hierarchicalSubject carries the full ancestor paths.
     const immichLeafTags = immichTags.filter(
         tag => !immichTags.some(other => other !== tag && other.startsWith(tag + '/'))
     );
-    const subjects = [...immichLeafTags];
+    const subjects = immichLeafTags.map(tag => tag.split('/').pop() ?? tag);
     for (const name of immichPeople)
         if (!subjects.includes(name)) subjects.push(name);
 

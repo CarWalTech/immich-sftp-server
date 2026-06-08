@@ -501,9 +501,13 @@ export class ImmichSessionCache
     }
     public async fetchCachedAssetXMP(assetId: string, api: ImmichAPI)
     {
-        // Fast path: if assetInfoCache already has fresh data, skip FETCH_Asset entirely.
+        // Use FETCH_AssetWithTags: if the cached entry is missing tags (populated from
+        // a search result) or was invalidated by a prior XMP write, this forces a fresh
+        // GET /api/assets/{id} which always returns full tag data.
         const cachedEntry = this.assetInfoCache.get(assetId);
-        const actual_asset = cachedEntry?.data ?? await api.FETCH_Asset(assetId);
+        const actual_asset = (cachedEntry?.data && cachedEntry.data.tags !== undefined)
+            ? cachedEntry.data
+            : await api.FETCH_AssetWithTags(assetId);
         const updatedAt = actual_asset.updatedAt ?? '';
 
         // Return already-rendered XMP if the asset hasn't changed.
@@ -538,6 +542,17 @@ export class ImmichSessionCache
         }
         this.xmpCache.set(assetId, { xmp, updatedAt });
         return xmp;
+    }
+
+    // Called after an XMP sidecar write: keeps the asset in assetInfoCache (so
+    // directory listings stay intact) but marks tags as stale so the next XMP read
+    // forces a fresh GET /api/assets/{id} that includes the updated tags.
+    public invalidateAssetXMP(assetId: string): void
+    {
+        const cached = this.assetInfoCache.get(assetId);
+        if (cached)
+            this.assetInfoCache.set(assetId, { ...cached, data: { ...cached.data, tags: undefined } });
+        this.xmpCache.delete(assetId);
     }
 
     public invalidateAssets(assetIds: string[])

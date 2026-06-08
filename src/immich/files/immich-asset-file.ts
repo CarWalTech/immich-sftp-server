@@ -102,8 +102,15 @@ export class ImmichAssetSidecarFile extends ImmichVirtualFile
     async event_writefile(contents: VirtualContentBuffer): Promise<boolean>
     {
         const content = contents.contents();
-        const actual_asset = await this.file_system.getApi().FETCH_Asset(this.asset.id);
-        await saveAssetMetadataFileContent(actual_asset, content, this.file_system.getApi());
+        const api = this.file_system.getApi();
+        // FETCH_AssetWithTags ensures currentTagIds is correct even when the cache
+        // entry was populated from a search result that omitted the tags field.
+        const actual_asset = await api.FETCH_AssetWithTags(this.asset.id);
+        await saveAssetMetadataFileContent(actual_asset, content, api);
+        // Mark tags stale and evict the XMP render so the next read re-fetches from
+        // Immich.  Do NOT delete from assetInfoCache — that would hide the asset from
+        // directory listings until the next album validation cycle.
+        api.CACHE_InvalidateAssetXMP(this.asset.id);
         this.parent_directory.refresh();
         return true;
     }
