@@ -117,6 +117,19 @@ export class ImmichFileSystem implements VirtualFileSystem
         const tmp_result = await this.memory.stat(filename)
         if (tmp_result) return { success: true, contents: tmp_result };
 
+        // After a file leaves the memory queue (Immich upload complete) it is no
+        // longer findable under its original name because the server presents it
+        // under the renamed path.  Without this check, stat() returns failure and
+        // rclone treats its confirmed upload as failed, re-queueing the same file
+        // indefinitely.  Returning a placeholder keeps rclone satisfied until its
+        // own VFS cache evicts the stale local entry.
+        const recentUpload = this.immichApi.QUEUE_GetRecentUpload(filename);
+        if (recentUpload)
+        {
+            const name = path.basename(filename);
+            return { success: true, contents: VirtualMetadata.file_rw(name, recentUpload.fileSize, Timestamp.now()) };
+        }
+
         const now = Date.now();
         const cached = this._statCache.get(filename);
         if (cached && now < cached.expiresAt) return cached.result;

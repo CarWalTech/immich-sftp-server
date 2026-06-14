@@ -22,6 +22,7 @@ export class Config
   LOGS_API: boolean;
   LOGS_EXPLICIT: boolean;
   LOGS_FILESYSTEM: boolean;
+  LOGS_MAX_SESSIONS: number;
 
   // server protocols
   PROTOCOL_HOST: string
@@ -63,6 +64,7 @@ export class Config
     this.LOGS_API = getEnvBoolean('SERVER_LOGS_API', false)
     this.LOGS_EXPLICIT = getEnvBoolean('SERVER_LOGS_EXPLICIT', true)
     this.LOGS_FILESYSTEM = getEnvBoolean('SERVER_LOGS_FILESYSTEM', false)
+    this.LOGS_MAX_SESSIONS = getEnvNumber('SERVER_LOGS_MAX_SESSIONS', 10)
 
     // server protocol
     this.PROTOCOL_HOST = getEnvOrDefault('SERVER_PROTOCOL_HOST', '0.0.0.0');

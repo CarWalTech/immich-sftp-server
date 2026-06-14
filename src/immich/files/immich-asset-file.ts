@@ -106,7 +106,24 @@ export class ImmichAssetSidecarFile extends ImmichVirtualFile
         // FETCH_AssetWithTags ensures currentTagIds is correct even when the cache
         // entry was populated from a search result that omitted the tags field.
         const actual_asset = await api.FETCH_AssetWithTags(this.asset.id);
-        await saveAssetMetadataFileContent(actual_asset, content, api);
+        try
+        {
+            await saveAssetMetadataFileContent(actual_asset, content, api);
+        }
+        catch (err)
+        {
+            if ((err as any)?.response?.status === 404)
+            {
+                // 404 typically means the asset is in a shared album owned by another
+                // user — the current API key cannot update it.  Return success so rclone
+                // does not mark the file dirty and retry in an infinite loop.  The XMP
+                // cache is intentionally not invalidated so subsequent reads stay consistent.
+                logger.warn('ImmichAssetSidecarFile', 'event_writefile',
+                    `XMP write for asset ${actual_asset.id} returned 404 — asset may be owned by another user; metadata update skipped`);
+                return true;
+            }
+            throw err;
+        }
         // Mark tags stale and evict the XMP render so the next read re-fetches from
         // Immich.  Do NOT delete from assetInfoCache — that would hide the asset from
         // directory listings until the next album validation cycle.

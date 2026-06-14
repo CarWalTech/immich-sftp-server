@@ -1,2 +1,0 @@
-logs/runtime-20260607-0000-1.log
-logs/runtime-20260608-0000-1.log

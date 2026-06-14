@@ -210,6 +210,7 @@ services:
 | `SERVER_LOGS_API` | `false` | Per-request API logs (method, endpoint, status, timing). |
 | `SERVER_LOGS_EXPLICIT` | `true` | Verbose internal logs for specific subsystems. |
 | `SERVER_LOGS_FILESYSTEM` | `false` | Per-request filesystem operation logs (method, path, timing). |
+| `SERVER_LOGS_MAX_SESSIONS` | `10` | Maximum number of session log folders to keep under `logs/sessions/`. Oldest folders are pruned on startup. |
 
 ## Connect / test
 

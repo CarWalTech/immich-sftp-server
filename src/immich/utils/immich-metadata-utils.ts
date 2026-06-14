@@ -607,7 +607,7 @@ export async function saveAssetMetadataFileContent(asset: ImmichAsset, contents:
     if (newRating !== undefined && Number.isFinite(newRating) && newRating >= 0 && newRating <= 5)
         patch.rating = Math.round(newRating);
 
-    if (newDate !== undefined)
+    if (newDate !== undefined && newDate !== (exif.dateTimeOriginal ?? asset.fileCreatedAt ?? ''))
         patch.dateTimeOriginal = newDate;
 
     if (newLat !== undefined && newLat !== exif.latitude)

@@ -30,12 +30,14 @@ export class ImmichAPI
     private immichAccessToken: string = '';
     private authMode: 'bearer' | 'api-key' = 'bearer';
     private uploadQueue: Array<ImmichUploadItem> = [];
+    private recentUploadCache: Map<string, { checksum: string, assetId?: string, fileSize: number, expiresAt: number }> = new Map();
     private currentUser: ImmichUser | null = null;
     private currentView: string | null = null;
     private userSettings: UserConfig;
     private shouldLogoutSession = false;
     private readonly baseUrl;
 
+    private static readonly RECENT_UPLOAD_TTL_MS = 30 * 1000;
     private static readonly sharedBufferCache = new Map<string, VirtualContentBuffer>();
     private static readonly downloadSemaphore = new DownloadSemaphore(config.OPTION_MAX_CONCURRENT_DOWNLOADS);
     private static readonly downloadsInFlight = new Map<string, Promise<VirtualContentBuffer>>();
@@ -456,7 +458,7 @@ export class ImmichAPI
         // fetching each album one at a time.  Only fires when the album list was
         // actually re-fetched (not a TTL cache hit) and at most once per TTL window.
         if (fetchedAlbums && this.cache.tryMarkPrefetch())
-            this.PREFETCH_AllAlbumAssets(fetchedAlbums).catch(() => {});
+            this.PREFETCH_AllAlbumAssets(fetchedAlbums).catch(() => { });
 
         return result;
     }
@@ -764,6 +766,19 @@ export class ImmichAPI
                 checksum = hash.digest('base64');
             }
 
+            // rclone with --vfs-cache-mode full re-sends the same file whenever it
+            // can't find it in the remote dir listing (because the server presents it
+            // under a renamed path).  Skip all Immich API calls if the same content
+            // was already processed for this path within the TTL window.
+            const cachedUpload = this.recentUploadCache.get(fileEntry.longname);
+            if (cachedUpload && cachedUpload.checksum === checksum && Date.now() < cachedUpload.expiresAt)
+            {
+                logger.info(`ImmichAPI`, 'QUEUE', `Skipping '${filename}' — same content already processed recently`);
+                if (fileEntry.uploadToAlbum && cachedUpload.assetId)
+                    await this.SERVER_AddAssetToAlbum(fileEntry.uploadToAlbum.id, cachedUpload.assetId);
+                return;
+            }
+
             let action = "reject";
             let isTrashed = false;
             let assetId: string | undefined;
@@ -815,11 +830,27 @@ export class ImmichAPI
             // Add to album
             if (fileEntry.uploadToAlbum && assetId)
                 await this.SERVER_AddAssetToAlbum(fileEntry.uploadToAlbum.id, assetId);
+
+            // Record this upload so repeated writes of the same content (e.g. from
+            // rclone's VFS cache loop) are short-circuited above without hitting Immich.
+            const expiresAt = Date.now() + ImmichAPI.RECENT_UPLOAD_TTL_MS;
+            this.recentUploadCache.set(fileEntry.longname, { checksum, assetId, fileSize, expiresAt });
+            const now = Date.now();
+            for (const [k, v] of this.recentUploadCache)
+                if (now > v.expiresAt) this.recentUploadCache.delete(k);
         }
         finally
         {
             node.removeCallback();
         }
+    }
+
+    public QUEUE_GetRecentUpload(longname: string): { fileSize: number } | null
+    {
+        const cached = this.recentUploadCache.get(longname);
+        if (!cached) return null;
+        if (Date.now() > cached.expiresAt) { this.recentUploadCache.delete(longname); return null; }
+        return { fileSize: cached.fileSize };
     }
 
     // #endregion
