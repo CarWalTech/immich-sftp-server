@@ -280,11 +280,7 @@ class ImmichWebdavFileSystem extends webdav.FileSystem
     const p = normalizePath(path.toString());
 
     backend.listFiles(p)
-      .then(files =>
-      {
-        const names = ['.', '..', ...files.map(f => f.name)];
-        cb(undefined, names);
-      })
+      .then(files => cb(undefined, files.map(f => f.name)))
       .catch(err => cb(err));
   }
 
@@ -296,6 +292,7 @@ class ImmichWebdavFileSystem extends webdav.FileSystem
     if (!backend) return cb(webdav.Errors.ResourceNotFound);
 
     const p = normalizePath(path.toString());
+    if (p === '/') return cb(undefined, 0);
 
     backend.stat(p)
       .then(stat =>
@@ -312,6 +309,7 @@ class ImmichWebdavFileSystem extends webdav.FileSystem
     if (!backend) return cb(webdav.Errors.ResourceNotFound);
 
     const p = normalizePath(path.toString());
+    if (p === '/') return cb(undefined, Date.now());
 
     backend.stat(p)
       .then(stat =>
