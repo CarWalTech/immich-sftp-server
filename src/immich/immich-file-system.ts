@@ -26,6 +26,7 @@ export class ImmichFileSystem implements VirtualFileSystem
     private _statCache: Map<string, { result: VFSResponse<VirtualMetadata>, expiresAt: number }> = new Map();
     private static readonly STAT_CACHE_TTL_MS = 500;
     private static readonly STAT_CACHE_PRUNE_THRESHOLD = 500;
+    private static readonly PHANTOM_XMP_TTL_MS = 30_000;
 
     constructor()
     {
@@ -104,6 +105,15 @@ export class ImmichFileSystem implements VirtualFileSystem
 
         if (parent && parent.isDir())
         {
+            // Immich rejects standalone XMP uploads (400 "Unsupported file type").
+            // Store in tmp so stat/remove succeed and rclone doesn't retry indefinitely.
+            if (name.toLowerCase().endsWith('.xmp'))
+            {
+                logger.filesystem("ImmichFileSystem", "WRITE", `Holding XMP in memory (no standalone upload): ${filename}`)
+                await this.memory.push_tmp(name, path.posix.dirname(PathUtils.normalizePath(filename)), tmpFile, ImmichFileSystem.PHANTOM_XMP_TTL_MS);
+                return;
+            }
+
             logger.filesystem("ImmichFileSystem", "WRITE", `Writing to new file: ${filename}`)
             await parent.event_createfile(name, tmpFile);
             await this.memory.flushQueued(filename);
@@ -297,7 +307,7 @@ export class ImmichFileSystemMemory
         return null
     }
 
-    async push_tmp(filename: string, fullpath: string, tmpFile: VirtualContentBuffer)
+    async push_tmp(filename: string, fullpath: string, tmpFile: VirtualContentBuffer, ttlMs?: number)
     {
         var full_name = fullpath + "/" + filename;
         filename = PathUtils.normalizePath(filename);
@@ -306,7 +316,8 @@ export class ImmichFileSystemMemory
         const data: ImmichFileSystemMemoryEntry = {
             filename: path.basename(full_name),
             longname: full_name,
-            tmpFile: tmpFile
+            tmpFile: tmpFile,
+            expiresAt: ttlMs !== undefined ? Date.now() + ttlMs : undefined
         };
 
         this.entries_tmp.push(data);
@@ -343,6 +354,9 @@ export class ImmichFileSystemMemory
             if (dir !== currentDir) continue;
             entriesMap.set(name, VirtualMetadata.file_rw(name, 0, Timestamp.now()));
         }
+
+        const now = Date.now();
+        this.entries_tmp = this.entries_tmp.filter(e => !e.expiresAt || now <= e.expiresAt);
 
         for (const entry of this.entries_tmp)
         {
@@ -399,6 +413,12 @@ export class ImmichFileSystemMemory
         filename = PathUtils.normalizePath(filename);
         const entry = this.find(filename);
         if (!entry) return null;
+
+        if (entry.type === "tmp")
+        {
+            const item = entry.item as ImmichFileSystemMemoryEntry;
+            if (item.expiresAt && Date.now() > item.expiresAt) return null;
+        }
 
         logger.filesystem("ImmichFileSystemMemory", "STAT", `Getting stats of: ${filename}`)
 
@@ -537,6 +557,7 @@ export interface ImmichFileSystemMemoryEntry
     filename: string;
     longname: string;
     tmpFile: VirtualContentBuffer;
+    expiresAt?: number;
 }
 
 
