@@ -25,6 +25,7 @@ export async function deleteAssetFromContainer(item: ImmichAssetFile, api: Immic
             if (info !== undefined)
             {
                 await api.SERVER_DeleteAssetFromAlbum(info, item.asset_data);
+                container.refresh();
                 return true;
             }
             else return false

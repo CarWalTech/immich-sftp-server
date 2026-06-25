@@ -16,8 +16,7 @@ import { Timestamp } from '../utils/date-utils';
 import { ImmichUploadItem } from "./immich-api";
 import { ImmichAlbumDirectoryInfo } from './utils/immich-api-utils';
 
-export class ImmichFileSystem implements VirtualFileSystem
-{
+export class ImmichFileSystem implements VirtualFileSystem {
     private immichApi: ImmichAPI
     private root: ImmichRootDirectory
     memory: ImmichFileSystemMemory
@@ -28,8 +27,7 @@ export class ImmichFileSystem implements VirtualFileSystem
     private static readonly STAT_CACHE_PRUNE_THRESHOLD = 500;
     private static readonly PHANTOM_XMP_TTL_MS = 30_000;
 
-    constructor()
-    {
+    constructor() {
         this.root = new ImmichRootDirectory(this);
         this.immichApi = new ImmichAPI(config.IMMICH_HOST.replace(/\/+$/, ''));
         this.memory = new ImmichFileSystemMemory(this);
@@ -37,32 +35,27 @@ export class ImmichFileSystem implements VirtualFileSystem
 
 
     // VirtualFileSystem Methods
-    async login(username: string, password: string): Promise<void>
-    {
+    async login(username: string, password: string): Promise<void> {
         logger.filesystem("ImmichFileSystem", "LOGIN", `Login starting for user: ${username}`)
         return await this.immichApi.login(username, password)
     }
 
-    async logout(): Promise<void>
-    {
+    async logout(): Promise<void> {
         logger.filesystem("ImmichFileSystem", "LOGOUT", `Logout starting for user: ${this.immichApi.getUser()?.id ?? 'unknown'}`)
         await this.immichApi.logout();
         await this.root.event_logout();
         logger.filesystem("ImmichFileSystem", "LOGOUT", `Logout complete for user: ${this.immichApi.getUser()?.id ?? 'unknown'}`)
     }
-    async setAttributes(_filename: string, _mtime: number)
-    {
+    async setAttributes(_filename: string, _mtime: number) {
         // No-op: mtime/chmod from SFTP clients (e.g. post-upload SETSTAT) is not
         // meaningful for Immich-backed files. Skipping resolvePath avoids triggering
         // a cache rebuild (and a FETCH_Albums call) immediately after every upload.
     }
-    async listFiles(currentDir: string)
-    {
+    async listFiles(currentDir: string) {
         const existing = this._listInflight.get(currentDir);
         if (existing) return existing;
 
-        const promise = (async () =>
-        {
+        const promise = (async () => {
             const { node } = await VirtualFsUtils.resolvePath(this.root, currentDir);
             if (!node || !node.isDir()) throw new Error(`Not a directory: ${currentDir}`);
 
@@ -76,8 +69,7 @@ export class ImmichFileSystem implements VirtualFileSystem
         this._listInflight.set(currentDir, promise);
         return promise;
     }
-    async readFile(filename: string)
-    {
+    async readFile(filename: string) {
         const tmp_result = await this.memory.read(filename)
         if (tmp_result) return tmp_result;
 
@@ -89,26 +81,22 @@ export class ImmichFileSystem implements VirtualFileSystem
         const file = (node as VirtualFile);
         return await file.event_readfile();
     }
-    async writeFile(filename: string, tmpFile: VirtualContentBuffer)
-    {
+    async writeFile(filename: string, tmpFile: VirtualContentBuffer) {
         const is_tmp = await this.memory.write(filename, tmpFile)
         if (is_tmp) return
 
         const { parent, node, name } = await VirtualFsUtils.resolvePath(this.root, filename);
 
-        if (node && !node.isDir())
-        {
+        if (node && !node.isDir()) {
             logger.filesystem("ImmichFileSystem", "WRITE", `Writing file: ${filename}`)
             await (node as VirtualFile).event_writefile(tmpFile);
             return;
         }
 
-        if (parent && parent.isDir())
-        {
+        if (parent && parent.isDir()) {
             // Immich rejects standalone XMP uploads (400 "Unsupported file type").
             // Store in tmp so stat/remove succeed and rclone doesn't retry indefinitely.
-            if (name.toLowerCase().endsWith('.xmp'))
-            {
+            if (name.toLowerCase().endsWith('.xmp')) {
                 logger.filesystem("ImmichFileSystem", "WRITE", `Holding XMP in memory (no standalone upload): ${filename}`)
                 await this.memory.push_tmp(name, path.posix.dirname(PathUtils.normalizePath(filename)), tmpFile, ImmichFileSystem.PHANTOM_XMP_TTL_MS);
                 return;
@@ -122,8 +110,7 @@ export class ImmichFileSystem implements VirtualFileSystem
 
         throw new Error("Cannot write to destination");
     }
-    async stat(filename: string): Promise<VFSResponse<VirtualMetadata>>
-    {
+    async stat(filename: string): Promise<VFSResponse<VirtualMetadata>> {
         const tmp_result = await this.memory.stat(filename)
         if (tmp_result) return { success: true, contents: tmp_result };
 
@@ -134,8 +121,7 @@ export class ImmichFileSystem implements VirtualFileSystem
         // indefinitely.  Returning a placeholder keeps rclone satisfied until its
         // own VFS cache evicts the stale local entry.
         const recentUpload = this.immichApi.QUEUE_GetRecentUpload(filename);
-        if (recentUpload)
-        {
+        if (recentUpload) {
             const name = path.basename(filename);
             return { success: true, contents: VirtualMetadata.file_rw(name, recentUpload.fileSize, Timestamp.now()) };
         }
@@ -144,8 +130,7 @@ export class ImmichFileSystem implements VirtualFileSystem
         const cached = this._statCache.get(filename);
         if (cached && now < cached.expiresAt) return cached.result;
 
-        if (this._statCache.size >= ImmichFileSystem.STAT_CACHE_PRUNE_THRESHOLD)
-        {
+        if (this._statCache.size >= ImmichFileSystem.STAT_CACHE_PRUNE_THRESHOLD) {
             for (const [key, entry] of this._statCache)
                 if (now >= entry.expiresAt) this._statCache.delete(key);
         }
@@ -153,12 +138,11 @@ export class ImmichFileSystem implements VirtualFileSystem
         const existing = this._statInflight.get(filename);
         if (existing) return existing;
 
-        const promise = (async () =>
-        {
+        const promise = (async () => {
             const { node } = await VirtualFsUtils.resolvePath(this.root, filename);
             if (!node) return { success: false, contents: undefined as any };
 
-            logger.filesystem("ImmichFileSystem", "STAT", `Getting stats of: ${filename}`)
+            //logger.filesystem("ImmichFileSystem", "STAT", `Getting stats of: ${filename}`)
 
             const node_result = await node.event_stat();
             const result = { success: true, contents: node_result };
@@ -169,8 +153,7 @@ export class ImmichFileSystem implements VirtualFileSystem
         this._statInflight.set(filename, promise);
         return promise;
     }
-    async rename(oldFileName: string, newFileName: string)
-    {
+    async rename(oldFileName: string, newFileName: string) {
         const tmp_result = await this.memory.rename(oldFileName, newFileName)
         if (tmp_result) return tmp_result;
 
@@ -178,8 +161,7 @@ export class ImmichFileSystem implements VirtualFileSystem
         const newRes = await VirtualFsUtils.resolvePath(this.root, newFileName);
 
         // If destination is a directory, append the original filename
-        if (newRes.node && newRes.node.isDir())
-        {
+        if (newRes.node && newRes.node.isDir()) {
             newFileName = newFileName + "/" + oldRes.name;
             // Re-resolve with the corrected path
             const corrected = await VirtualFsUtils.resolvePath(this.root, newFileName);
@@ -187,40 +169,36 @@ export class ImmichFileSystem implements VirtualFileSystem
             newRes.name = corrected.name;
         }
 
-        if (!oldRes.node)
-        {
+        if (!oldRes.node) {
             throw new Error('File not found');
         }
-        else if (oldRes.name == newRes.name && oldRes.parent.fullpath != newRes.parent.fullpath)
-        {
+        else if (oldRes.name == newRes.name && oldRes.parent.fullpath != newRes.parent.fullpath) {
             logger.filesystem("ImmichFileSystem", "RENAME", `Renaming folder: ${oldFileName} -> ${newFileName}`)
             // Asset move: event handlers invalidate only what they touch.
             // Directory move: full tree invalidation needed since album structure changes.
             if (oldRes.node.isDir()) this.invalidateTree();
             return await oldRes.parent.event_movenode(oldRes.node, newRes.parent)
         }
-        else
-        {
+        else {
             logger.filesystem("ImmichFileSystem", "RENAME", `Renaming file: ${oldFileName} -> ${newFileName}`)
             this.invalidateTree();
             return await oldRes.node.event_rename(newRes.name)
         }
 
     }
-    async remove(filename: string)
-    {
+    async remove(filename: string) {
         const { parent, name, node } = await VirtualFsUtils.resolvePath(this.root, filename);
 
-        if (!node)
-        {
+        if (!node) {
             return await this.memory.remove(filename);
         }
 
         logger.filesystem("ImmichFileSystem", "REMOVE", `Deleting: ${filename}`)
-        return await node.event_delete();
+        const result = await node.event_delete();
+        if (result) this.invalidatePath(filename);
+        return result;
     }
-    async mkdir(path: string)
-    {
+    async mkdir(path: string) {
         const { parent, node, name } = await VirtualFsUtils.resolvePath(this.root, path);
 
         if (node) return false;
@@ -233,13 +211,11 @@ export class ImmichFileSystem implements VirtualFileSystem
     }
 
 
-    public invalidateTree()
-    {
+    public invalidateTree() {
         this.immichApi.CACHE_InvalidateTree()
     }
 
-    public invalidatePath(path: string)
-    {
+    public invalidatePath(path: string) {
         this.immichApi.CACHE_InvalidateFilepath(path)
         this._statCache.delete(path);
     }
@@ -247,32 +223,25 @@ export class ImmichFileSystem implements VirtualFileSystem
 
     // Get Methods
 
-    public getApi()
-    {
+    public getApi() {
         return this.immichApi;
     }
-    public getUrl()
-    {
+    public getUrl() {
         return this.immichApi.getBaseUrl()
     }
-    public getCurrentUser()
-    {
+    public getCurrentUser() {
         return this.immichApi.getUser()
     }
-    public getCurrentUserView()
-    {
+    public getCurrentUserView() {
         return this.immichApi.getUserView()
     }
-    public isAuthenticated(): boolean
-    {
+    public isAuthenticated(): boolean {
         return this.immichApi.getUser() !== null;
     }
-    public getUserSettings()
-    {
+    public getUserSettings() {
         return this.immichApi.getUserSettings()
     }
-    public async getResolvedPath(path: string): Promise<VirtualPathInfo>
-    {
+    public async getResolvedPath(path: string): Promise<VirtualPathInfo> {
         return await VirtualFsUtils.resolvePath(this.root, path);
     }
 
@@ -281,23 +250,19 @@ export class ImmichFileSystem implements VirtualFileSystem
 
 }
 
-export class ImmichFileSystemMemory
-{
+export class ImmichFileSystemMemory {
     private immich_fs: ImmichFileSystem
     private entries_tmp: ImmichFileSystemMemoryEntry[] = [];
 
-    constructor(immich_fs: ImmichFileSystem)
-    {
+    constructor(immich_fs: ImmichFileSystem) {
         this.immich_fs = immich_fs
     }
 
-    get entries(): ImmichUploadItem[]
-    {
+    get entries(): ImmichUploadItem[] {
         return this.immich_fs.getApi().QUEUE_List()
     }
 
-    private find(filename: string): { type: "queue" | "tmp", item: ImmichFileSystemMemoryEntry | ImmichUploadItem | undefined } | null
-    {
+    private find(filename: string): { type: "queue" | "tmp", item: ImmichFileSystemMemoryEntry | ImmichUploadItem | undefined } | null {
         const uploadable = this.entries.find(f => f.longname === filename);
         if (uploadable) return { type: "queue", item: uploadable }
 
@@ -307,8 +272,7 @@ export class ImmichFileSystemMemory
         return null
     }
 
-    async push_tmp(filename: string, fullpath: string, tmpFile: VirtualContentBuffer, ttlMs?: number)
-    {
+    async push_tmp(filename: string, fullpath: string, tmpFile: VirtualContentBuffer, ttlMs?: number) {
         var full_name = fullpath + "/" + filename;
         filename = PathUtils.normalizePath(filename);
         full_name = PathUtils.normalizePath(full_name);
@@ -325,8 +289,7 @@ export class ImmichFileSystemMemory
         return true;
     }
 
-    async push(filename: string, fullpath: string, tmpFile: VirtualContentBuffer, album?: ImmichAlbumDirectoryInfo)
-    {
+    async push(filename: string, fullpath: string, tmpFile: VirtualContentBuffer, album?: ImmichAlbumDirectoryInfo) {
         var full_name = fullpath + "/" + filename;
         filename = PathUtils.normalizePath(filename);
         full_name = PathUtils.normalizePath(full_name);
@@ -341,12 +304,10 @@ export class ImmichFileSystemMemory
         return true;
     }
 
-    async list(currentDir: string): Promise<VirtualMetadata[]>
-    {
+    async list(currentDir: string): Promise<VirtualMetadata[]> {
         const entriesMap = new Map<string, VirtualMetadata>();
 
-        for (const entry of this.entries)
-        {
+        for (const entry of this.entries) {
             const parts = entry.longname.split('/');
             const dir = parts.slice(0, -1).join('/') || '/';
             const name = parts[parts.length - 1];
@@ -358,8 +319,7 @@ export class ImmichFileSystemMemory
         const now = Date.now();
         this.entries_tmp = this.entries_tmp.filter(e => !e.expiresAt || now <= e.expiresAt);
 
-        for (const entry of this.entries_tmp)
-        {
+        for (const entry of this.entries_tmp) {
             const parts = entry.longname.split('/');
             const dir = parts.slice(0, -1).join('/') || '/';
             const name = parts[parts.length - 1];
@@ -371,14 +331,12 @@ export class ImmichFileSystemMemory
         return [...entriesMap.values()];
     }
 
-    async read(filename: string)
-    {
+    async read(filename: string) {
         filename = PathUtils.normalizePath(filename);
         const found = this.find(filename);
         if (!found || !found.item) return null
 
-        if (found.type === "tmp")
-        {
+        if (found.type === "tmp") {
             logger.filesystem("ImmichFileSystemMemory", "READ", `Reading memory file: ${filename}`)
             const entry = found.item as ImmichFileSystemMemoryEntry;
             // Return the existing tmp file directly
@@ -387,14 +345,12 @@ export class ImmichFileSystemMemory
         return null;
     }
 
-    async write(filename: string, tmpFile: VirtualContentBuffer)
-    {
+    async write(filename: string, tmpFile: VirtualContentBuffer) {
         // Normalize once
         const normalized = filename;
 
         // 1) If this is a .part file → keep it in memory only
-        if (normalized.endsWith(".part"))
-        {
+        if (normalized.endsWith(".part")) {
             logger.filesystem("ImmichFileSystemMemory", "WRITE", `Writing memory file: ${filename}`)
             const dir = path.posix.dirname(normalized);
             const base = path.posix.basename(normalized);
@@ -402,20 +358,17 @@ export class ImmichFileSystemMemory
             await this.push_tmp(base, dir, tmpFile);
             return true;
         }
-        else
-        {
+        else {
             return false;
         }
     }
 
-    async stat(filename: string)
-    {
+    async stat(filename: string) {
         filename = PathUtils.normalizePath(filename);
         const entry = this.find(filename);
         if (!entry) return null;
 
-        if (entry.type === "tmp")
-        {
+        if (entry.type === "tmp") {
             const item = entry.item as ImmichFileSystemMemoryEntry;
             if (item.expiresAt && Date.now() > item.expiresAt) return null;
         }
@@ -432,48 +385,40 @@ export class ImmichFileSystemMemory
      * Called by ImmichFileSystem.writeFile immediately after event_createfile
      * so the upload starts as soon as the file is closed, not on the next stat().
      */
-    async flushQueued(filename: string): Promise<void>
-    {
+    async flushQueued(filename: string): Promise<void> {
         const normalized = PathUtils.normalizePath(filename);
         const index = this.entries.findIndex(e => e.longname === normalized);
         if (index === -1) return;
 
         const queueItem = this.entries[index];
-        try
-        {
+        try {
             await this.immich_fs.getApi().QUEUE_UploadFile(queueItem, Timestamp.currentTime());
         }
-        finally
-        {
+        finally {
             // Always remove from queue regardless of upload success/failure
             this.immich_fs.getApi().QUEUE_Splice(index, 1);
         }
     }
 
-    async rename(oldName: string, newName: string)
-    {
+    async rename(oldName: string, newName: string) {
         oldName = PathUtils.normalizePath(oldName);
         newName = PathUtils.normalizePath(newName);
         const entry = this.find(oldName);
 
-        if (!entry)
-        {
+        if (!entry) {
             logger.error("ImmichWritableMemory", "Rename", `Not found: ${oldName}`)
             return false;
         }
-        if (this.entries.find(e => e.longname === newName))
-        {
+        if (this.entries.find(e => e.longname === newName)) {
             logger.error("ImmichWritableMemory", "Rename", `Target already exists: ${newName} (old name: ${oldName})`)
             return false;
         }
 
-        if (entry.type === "queue")
-        {
+        if (entry.type === "queue") {
             this.immich_fs.getApi().QUEUE_RenameFileInFlight((entry.item as ImmichUploadItem).longname, newName)
             return true;
         }
-        else if (entry.type === "tmp")
-        {
+        else if (entry.type === "tmp") {
             const fileIndex = this.entries_tmp.findIndex(f => f.longname === oldName);
             if (fileIndex === -1) return false;
 
@@ -482,8 +427,7 @@ export class ImmichFileSystemMemory
             const wasPart = oldName.endsWith(".part");
             const isPart = newName.endsWith(".part");
 
-            if (wasPart && !isPart)
-            {
+            if (wasPart && !isPart) {
                 // FINALIZE: .part → real file
                 // writeFile first — if it throws the entry stays in entries_tmp so
                 // a retry is still possible and the data is not silently lost.
@@ -496,8 +440,7 @@ export class ImmichFileSystemMemory
 
                 return true;
             }
-            else
-            {
+            else {
                 // Still a tmp file, just rename in memory
                 const oldLongName = mem.longname;
                 mem.longname = newName;
@@ -514,20 +457,16 @@ export class ImmichFileSystemMemory
 
     }
 
-    async remove(path: string)
-    {
+    async remove(path: string) {
         const item_entry = this.find(path);
-        if (!item_entry)
-        {
+        if (!item_entry) {
             logger.error("ImmichWritableMemory", "Remove", `Not found: ${path}`)
             return false;
         }
 
-        if (item_entry.type === "queue")
-        {
+        if (item_entry.type === "queue") {
             const index = this.entries.findIndex(e => e.longname === path);
-            if (index === -1)
-            {
+            if (index === -1) {
                 logger.error("ImmichWritableMemory", "Remove", `Not found: ${path}`)
                 return false;
             }
@@ -535,11 +474,9 @@ export class ImmichFileSystemMemory
             this.immich_fs.getApi().QUEUE_Splice(index, 1);
             return true;
         }
-        else if (item_entry.type === "tmp")
-        {
+        else if (item_entry.type === "tmp") {
             const index = this.entries_tmp.findIndex(e => e.longname === path);
-            if (index === -1)
-            {
+            if (index === -1) {
                 logger.error("ImmichWritableMemory", "Remove", `Not found: ${path}`)
                 return false;
             }
@@ -552,8 +489,7 @@ export class ImmichFileSystemMemory
     }
 }
 
-export interface ImmichFileSystemMemoryEntry
-{
+export interface ImmichFileSystemMemoryEntry {
     filename: string;
     longname: string;
     tmpFile: VirtualContentBuffer;
