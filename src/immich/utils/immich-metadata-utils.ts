@@ -1,8 +1,12 @@
 import Builder from 'fast-xml-builder';
 import fs from 'fs';
+import path from 'path';
+import tmp from 'tmp';
+import { exiftool } from 'exiftool-vendored';
 import YAML from 'yaml';
 import { config } from '../../config';
 import { isObject } from '../../utils/common-utils';
+import { VirtualContentBuffer } from '../../filesystem/virtual-content-buffer';
 import { XMPUtils } from '../../utils/xmp-utils';
 import { ImmichAPI } from '../immich-api';
 import { ImmichAlbumBase, ImmichAlbumUser, ImmichAsset, ImmichUser, isCurrentUserAlbumOwner } from "./immich-api-utils";
@@ -551,6 +555,56 @@ export async function _syncAssetTagsFromXmp(asset: ImmichAsset, newTagValues: st
 
     if (toRemove.length > 0)
         await api.SERVER_RemoveAssetsFromTags(asset.id, toRemove)
+}
+
+function detectImageExtension(header: Buffer): string | null
+{
+    if (header.length < 4) return null;
+    // JPEG
+    if (header[0] === 0xFF && header[1] === 0xD8 && header[2] === 0xFF) return '.jpg';
+    // PNG
+    if (header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4E && header[3] === 0x47) return '.png';
+    // GIF
+    if (header[0] === 0x47 && header[1] === 0x49 && header[2] === 0x46) return '.gif';
+    // TIFF (little-endian)
+    if (header[0] === 0x49 && header[1] === 0x49 && header[2] === 0x2A && header[3] === 0x00) return '.tiff';
+    // TIFF (big-endian)
+    if (header[0] === 0x4D && header[1] === 0x4D && header[2] === 0x00 && header[3] === 0x2A) return '.tiff';
+    if (header.length < 12) return null;
+    // WebP: RIFF....WEBP
+    if (header[0] === 0x52 && header[1] === 0x49 && header[2] === 0x46 && header[3] === 0x46 &&
+        header[8] === 0x57 && header[9] === 0x45 && header[10] === 0x42 && header[11] === 0x50) return '.webp';
+    // ISO base media (MP4/MOV/HEIC/AVIF): ftyp box at offset 4
+    if (header[4] === 0x66 && header[5] === 0x74 && header[6] === 0x79 && header[7] === 0x70)
+    {
+        const brand = header.subarray(8, 12).toString('ascii');
+        if (/^(heic|heis|heix|hevc|hevx|mif1|msf1)/.test(brand)) return '.heic';
+        if (/^avif/.test(brand)) return '.avif';
+        return '.mp4';
+    }
+    return null;
+}
+
+export async function embedXmpIntoImage(imageVcb: VirtualContentBuffer, xmpContent: string, _ext: string): Promise<VirtualContentBuffer>
+{
+    const header = imageVcb.read(0, Math.min(12, imageVcb.size));
+    const detectedExt = detectImageExtension(header) ?? _ext ?? '.jpg';
+
+    const imageTmp = tmp.fileSync({ postfix: detectedExt, discardDescriptor: true, keep: false });
+    const xmpTmp = tmp.fileSync({ postfix: '.xmp', discardDescriptor: true, keep: false });
+    try
+    {
+        fs.writeFileSync(imageTmp.name, imageVcb.read(0, imageVcb.size));
+        fs.writeFileSync(xmpTmp.name, xmpContent, 'utf8');
+        await exiftool.write(imageTmp.name, {}, ['-tagsfromfile', xmpTmp.name, '-XMP:all']);
+        const result = fs.readFileSync(imageTmp.name);
+        return new VirtualContentBuffer(undefined, result);
+    }
+    finally
+    {
+        imageTmp.removeCallback();
+        xmpTmp.removeCallback();
+    }
 }
 
 export async function saveAssetMetadataFileContent(asset: ImmichAsset, contents: string, api: ImmichAPI): Promise<void>

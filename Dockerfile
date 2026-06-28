@@ -6,6 +6,9 @@ WORKDIR /app
 # Copy package metadata first for better layer caching
 COPY package*.json ./
 
+# Install Perl
+RUN apk update && apk add --no-cache perl
+
 # Install ALL dependencies
 RUN npm install --loglevel=error --no-audit --no-fund 
 

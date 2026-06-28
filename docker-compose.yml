@@ -16,4 +16,7 @@ services:
       - ${SERVER_PATH_APPCONFIG}:/config
       - ${SERVER_PATH_IMMICH_UPLOADS}:/immich/data
       - ${SERVER_PATH_LOGS}:/logs
+      # External Libaries: You can add or remove as many of these lines as you want to be able to mount external storages:
+      # <local location of disk>:/immich/<location within immich container>
+      - /srv/dev-disk-by-uuid-d5ae5b87-0a45-4f6f-9549-62aee5d44a62/immich/library:/immich/mnt/library
     restart: unless-stopped

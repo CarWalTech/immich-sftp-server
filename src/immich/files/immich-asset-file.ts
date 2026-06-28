@@ -1,3 +1,4 @@
+import path from "path";
 import { VirtualContentBuffer, VirtualContentBufferUtils } from "../../filesystem/virtual-content-buffer";
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
@@ -6,7 +7,7 @@ import { ImmichFileSystem } from "../immich-file-system";
 import { ImmichVirtualFile } from "../immich-virtual-file";
 import { getAssetMtime, ImmichAsset } from "../utils/immich-api-utils";
 import { deleteAssetFromContainer } from "../utils/immich-fs-utils";
-import { saveAssetMetadataFileContent } from "../utils/immich-metadata-utils";
+import { embedXmpIntoImage, saveAssetMetadataFileContent } from "../utils/immich-metadata-utils";
 
 export class ImmichAssetFile extends ImmichVirtualFile
 {
@@ -62,7 +63,19 @@ export class ImmichAssetFile extends ImmichVirtualFile
 
     async event_readfile(): Promise<VirtualContentBuffer>
     {
-        return await this.file_system.getApi().SERVER_ReadAsset(this.asset)
+        const raw = await this.file_system.getApi().SERVER_ReadAsset(this.asset);
+        const settings = this.file_system.getApi().getUserSettings();
+        if (!settings.assetEmbedMetadata) return raw;
+        try
+        {
+            const xmp = await this.file_system.getApi().FETCH_AssetXMP(this.asset.id);
+            return await embedXmpIntoImage(raw, xmp, path.extname(this.asset.originalFileName));
+        }
+        catch (err)
+        {
+            logger.warn('ImmichAssetFile', 'event_readfile', `XMP embed failed for ${this.asset.id}: ${err}`);
+            return raw;
+        }
     }
 }
 
