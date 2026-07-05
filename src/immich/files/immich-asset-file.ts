@@ -61,9 +61,9 @@ export class ImmichAssetFile extends ImmichVirtualFile
         return VirtualMetadata.file_ro(this.name, size, getAssetMtime(this.asset));
     }
 
-    async event_readfile(): Promise<VirtualContentBuffer>
+    async event_readfile(signal?: AbortSignal): Promise<VirtualContentBuffer>
     {
-        const raw = await this.file_system.getApi().SERVER_ReadAsset(this.asset);
+        const raw = await this.file_system.getApi().SERVER_ReadAsset(this.asset, signal);
         const settings = this.file_system.getApi().getUserSettings();
         if (!settings.assetEmbedMetadata) return raw;
         try

@@ -1,21 +1,27 @@
 /**
- * Lightweight counting semaphore for concurrency control.
+ * Counting semaphore with two priority levels.
+ *
+ * Callers that acquire() at 'high' will be served before any queued 'low'
+ * callers when a slot becomes free. Within the same priority level the queue
+ * is FIFO. Passing no priority defaults to 'low' so existing call sites need
+ * no changes.
  */
 export class DownloadSemaphore
 {
     private readonly limit: number;
     private running = 0;
-    private readonly queue: Array<() => void> = [];
+    private readonly highQueue: Array<() => void> = [];
+    private readonly lowQueue: Array<() => void> = [];
 
     constructor(limit: number) { this.limit = limit; }
 
     private get hasFreeSpace()
     {
-        if (this.limit == 0) return true;
+        if (this.limit === 0) return true;
         return this.running < this.limit;
     }
 
-    acquire(): Promise<void>
+    acquire(priority: 'high' | 'low' = 'low'): Promise<void>
     {
         if (this.hasFreeSpace)
         {
@@ -24,14 +30,17 @@ export class DownloadSemaphore
         }
         return new Promise<void>(resolve =>
         {
-            this.queue.push(() => { this.running++; resolve(); });
+            const cb = () => { this.running++; resolve(); };
+            if (priority === 'high') this.highQueue.push(cb);
+            else this.lowQueue.push(cb);
         });
     }
 
     release(): void
     {
         this.running--;
-        const next = this.queue.shift();
+        // Drain high-priority waiters before low-priority.
+        const next = this.highQueue.shift() ?? this.lowQueue.shift();
         if (next) next();
     }
 }

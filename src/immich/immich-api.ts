@@ -40,7 +40,14 @@ export class ImmichAPI
     private static readonly RECENT_UPLOAD_TTL_MS = 30 * 1000;
     private static readonly sharedBufferCache = new Map<string, VirtualContentBuffer>();
     private static readonly downloadSemaphore = new DownloadSemaphore(config.OPTION_MAX_CONCURRENT_DOWNLOADS);
-    private static readonly downloadsInFlight = new Map<string, Promise<VirtualContentBuffer>>();
+    private static readonly downloadsInFlight = new Map<string, { promise: Promise<VirtualContentBuffer>; ctrl: AbortController }>();
+
+    // Per-user (per-instance) registry of in-flight metadata searches.
+    // Allows a new navigation request to cancel the oldest stale one so the
+    // current folder loads without competing with abandoned folder loads.
+    private static searchSeq = 0;
+    private readonly searchRegistry = new Map<number, { ctrl: AbortController; priority: 'high' | 'low' }>();
+    private static readonly MAX_CONCURRENT_SEARCHES = 2;
 
     constructor(immich_url: string)
     {
@@ -211,7 +218,7 @@ export class ImmichAPI
     // #endregion
 
     // #region Api Function
-    private async callApi({ method, endpoint, data, logAction, respAsStream = false, skipResponseLog = false }: { method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', endpoint: string, data?: any, logAction: string, respAsStream?: boolean, skipResponseLog?: boolean }): Promise<any>
+    private async callApi({ method, endpoint, data, logAction, respAsStream = false, skipResponseLog = false, signal }: { method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', endpoint: string, data?: any, logAction: string, respAsStream?: boolean, skipResponseLog?: boolean, signal?: AbortSignal }): Promise<any>
     {
         const isDownload = method === 'GET' && endpoint.startsWith('assets/') && (endpoint.endsWith('/original') || endpoint.endsWith('/thumbnail'));
 
@@ -220,6 +227,9 @@ export class ImmichAPI
 
         for (let attempt = 0; attempt <= maxRetries; attempt++)
         {
+            // Don't start (or retry) a cancelled request.
+            if (signal?.aborted) { lastError = signal.reason ?? new Error('Cancelled'); break; }
+
             try
             {
                 logger.api(`ImmichAPI`, `${logAction}`, `Sending: ${method} /api/${endpoint}`);
@@ -228,6 +238,7 @@ export class ImmichAPI
                     method: method,
                     url: `${this.baseUrl}/api/${endpoint}`,
                     timeout: 30_000,
+                    signal,
                     headers: {
                         ...(isDownload ? {} : { 'Accept': 'application/json' }),
                         'User-Agent': API_USERAGENT,
@@ -254,6 +265,9 @@ export class ImmichAPI
             {
                 lastError = err;
 
+                // Don't retry or log intentional cancellations.
+                if (ImmichAPI.isAbortError(err)) break;
+
                 const status = axios.isAxiosError(err) ? err.response?.status : undefined;
                 const isRetryable = status === 429 || status === 502 || status === 503 || status === 504;
 
@@ -268,6 +282,13 @@ export class ImmichAPI
 
                 break;
             }
+        }
+
+        if (ImmichAPI.isAbortError(lastError))
+        {
+            // Cancellations are expected; log at debug level only.
+            logger.debug(`ImmichAPI`, `${logAction}`, `Request cancelled: ${method} /api/${endpoint}`);
+            throw lastError;
         }
 
         if (axios.isAxiosError(lastError))
@@ -485,7 +506,7 @@ export class ImmichAPI
                                 skipResponseLog: true,
                             });
                             applyAlbumDetails(album, response);
-                            return await this.FETCH_AssetsByMetadata(
+                            return await this.FETCH_AssetsByMetadataBackground(
                                 { albumIds: [album.id], visibility: "timeline" },
                                 { albumIds: [album.id], visibility: "archive" }
                             );
@@ -605,7 +626,76 @@ export class ImmichAPI
             buildFiles: (assets, settings) => mapFilesFromAssets(assets, parent, reserved_names, settings.assetSidecarsEnabled)
         }, this.userSettings);
     }
+    // Called for user-triggered navigation — may evict a stale background or
+    // older navigation search to ensure the current folder loads promptly.
     public async FETCH_AssetsByMetadata(...queries: ImmichMetadataSearchArguments[]): Promise<ImmichAsset[]>
+    {
+        return this.doMetadataSearch('high', ...queries);
+    }
+
+    // Called for background prefetch — runs at low priority and is the first
+    // to be cancelled when the user navigates to a new folder.
+    private async FETCH_AssetsByMetadataBackground(...queries: ImmichMetadataSearchArguments[]): Promise<ImmichAsset[]>
+    {
+        return this.doMetadataSearch('low', ...queries);
+    }
+
+    private async doMetadataSearch(priority: 'high' | 'low', ...queries: ImmichMetadataSearchArguments[]): Promise<ImmichAsset[]>
+    {
+        // Concurrency control: limit how many simultaneous folder loads compete
+        // for Immich API capacity.  When a high-priority (navigation) request
+        // arrives and all slots are taken, evict the oldest low-priority
+        // (prefetch) search first; if none exists, evict the oldest
+        // high-priority one (the user has already moved past that folder).
+        if (this.searchRegistry.size >= ImmichAPI.MAX_CONCURRENT_SEARCHES && priority === 'high')
+        {
+            let evicted = false;
+            for (const [key, entry] of this.searchRegistry)
+            {
+                if (entry.priority === 'low')
+                {
+                    entry.ctrl.abort();
+                    this.searchRegistry.delete(key);
+                    evicted = true;
+                    logger.debug('ImmichAPI', 'Search', 'Cancelled background prefetch to prioritize navigation');
+                    break;
+                }
+            }
+            if (!evicted)
+            {
+                // All slots are taken by navigation requests — cancel the oldest
+                // (the user moved on from that folder before it finished loading).
+                const oldestKey = this.searchRegistry.keys().next().value;
+                if (oldestKey !== undefined)
+                {
+                    this.searchRegistry.get(oldestKey)!.ctrl.abort();
+                    this.searchRegistry.delete(oldestKey);
+                    logger.debug('ImmichAPI', 'Search', 'Cancelled stale folder load to prioritize current navigation');
+                }
+            }
+        }
+
+        const seq = ++ImmichAPI.searchSeq;
+        const ctrl = new AbortController();
+        this.searchRegistry.set(seq, { ctrl, priority });
+
+        try
+        {
+            return await this.runMetadataQueries(ctrl.signal, ...queries);
+        }
+        catch (e)
+        {
+            if (ImmichAPI.isAbortError(e))
+                logger.debug('ImmichAPI', 'Search', `Folder load cancelled (seq=${seq}, priority=${priority})`);
+            throw e;
+        }
+        finally
+        {
+            this.searchRegistry.delete(seq);
+        }
+    }
+
+    private async runMetadataQueries(signal: AbortSignal, ...queries: ImmichMetadataSearchArguments[]): Promise<ImmichAsset[]>
     {
         // Each query has its own pagination loop.  Run all queries concurrently so that
         // e.g. the "timeline" and "archive" visibility passes for an album overlap instead
@@ -630,6 +720,7 @@ export class ImmichAPI
                     }),
                     logAction: 'Search assets',
                     skipResponseLog: true,
+                    signal,
                 });
 
                 const items = Array.isArray(response?.assets?.items) ? response.assets.items : [];
@@ -1044,7 +1135,7 @@ export class ImmichAPI
             logAction: 'Bulk upload check'
         });
     }
-    async SERVER_ReadAsset(asset: ImmichAsset): Promise<VirtualContentBuffer>
+    async SERVER_ReadAsset(asset: ImmichAsset, signal?: AbortSignal): Promise<VirtualContentBuffer>
     {
         // 1. Fast-path: per-connection buffer cache
         const localCached = this.cache.assetFileBuffers.get(asset.id);
@@ -1075,23 +1166,42 @@ export class ImmichAPI
         //    Node.js is single-threaded: there is no await between the get() check below and the
         //    set() in step 6, so at most one download promise is ever registered per asset.
         //    All concurrent callers for the same asset await the same promise.
-        const existingInflight = ImmichAPI.downloadsInFlight.get(asset.id);
-        if (existingInflight)
+        const existingEntry = ImmichAPI.downloadsInFlight.get(asset.id);
+        if (existingEntry)
         {
+            // Race between the shared download completing and our caller being cancelled.
+            // We do NOT propagate our signal to the shared ctrl — another connection may still
+            // need that download.  If our signal fires we throw locally; if the download fails
+            // we fall through and start a fresh one.
+            const wait = signal
+                ? Promise.race([existingEntry.promise, ImmichAPI.abortRejector(signal)])
+                : existingEntry.promise;
             try
             {
-                const result = await existingInflight;
+                const result = await wait;
                 // Buffer-backed: safe to share — removeCallback() is a no-op on plain memory.
                 if (result.isBuffer) return result;
                 // Tmp-backed: each connection must own its tmp file because session close calls
                 // removeCallback(), which would delete the file out from under other connections.
                 // Fall through to download a fresh copy now that the concurrent one has finished.
             }
-            catch { /* primary failed — fall through to retry */ }
+            catch (e)
+            {
+                // Our caller was cancelled — propagate immediately without retrying.
+                if (signal?.aborted) throw e;
+                /* primary failed — fall through to retry */
+            }
         }
 
-        // 6. No usable in-flight result — register our promise SYNCHRONOUSLY before the first
+        // 6. Bail immediately if the caller was already cancelled before we start a new download.
+        if (signal?.aborted) throw Object.assign(new Error('Download cancelled'), { name: 'AbortError' });
+
+        // 7. No usable in-flight result — register our promise SYNCHRONOUSLY before the first
         //    await, so any connection that calls get() after this point sees it immediately.
+        //    The ctrl lets the caller cancel this specific download without affecting others.
+        const ctrl = new AbortController();
+        if (signal) signal.addEventListener('abort', () => ctrl.abort(), { once: true });
+
         let resolveInflight!: (node: VirtualContentBuffer) => void;
         let rejectInflight!: (err: unknown) => void;
         const inflightPromise = new Promise<VirtualContentBuffer>((res, rej) =>
@@ -1099,15 +1209,24 @@ export class ImmichAPI
             resolveInflight = res;
             rejectInflight = rej;
         });
-        ImmichAPI.downloadsInFlight.set(asset.id, inflightPromise);
+        ImmichAPI.downloadsInFlight.set(asset.id, { promise: inflightPromise, ctrl });
 
-        // 7. Acquire a shared semaphore slot (static — all connections share the same N slots).
+        // 8. Acquire a shared semaphore slot (static — all connections share the same N slots).
         await ImmichAPI.downloadSemaphore.acquire();
 
         try
         {
-            // 8. Re-check shared cache inside the semaphore guard.
-            //    A connection that had to wait for a slot may find the asset was already downloaded.
+            // 9. If the caller cancelled while we were queued in the semaphore, release the slot
+            //    immediately rather than starting a download nobody wants.
+            if (ctrl.signal.aborted)
+            {
+                const err = Object.assign(new Error('Download cancelled'), { name: 'AbortError' });
+                rejectInflight(err);
+                throw err;
+            }
+
+            // 10. Re-check shared cache inside the semaphore guard.
+            //     A connection that had to wait for a slot may find the asset was already downloaded.
             const cachedAfterWait = ImmichAPI.CACHE_GetShared(asset.id);
             if (cachedAfterWait)
             {
@@ -1115,11 +1234,12 @@ export class ImmichAPI
                 return cachedAfterWait;
             }
 
-            // 9. Stream from Immich so we can inspect Content-Length before choosing storage.
+            // 11. Stream from Immich so we can inspect Content-Length before choosing storage.
             const response = await axios.request({
                 method: 'GET',
                 url: `${this.baseUrl}/api/${endpoint}`,
                 timeout: 30_000,
+                signal: ctrl.signal,
                 headers: {
                     'User-Agent': 'ImmichNetworkStorage (Linux)',
                     ...(this.authMode === 'api-key'
@@ -1159,7 +1279,7 @@ export class ImmichAPI
                     throw new Error(`Truncated download for ${asset.id}: got ${node.size} of ${contentLength} bytes`);
             }
 
-            // 10. Cache buffer nodes globally. Tmp nodes are NOT cached globally — session close
+            // 12. Cache buffer nodes globally. Tmp nodes are NOT cached globally — session close
             //     calls removeCallback() on them; a cross-connection cache entry would then point
             //     at a deleted file.
             if (node.isBuffer)
@@ -1174,6 +1294,8 @@ export class ImmichAPI
         catch (e)
         {
             rejectInflight(e);
+            if (ImmichAPI.isAbortError(e))
+                logger.debug(`ImmichAPI`, 'SERVER_ReadAsset', `Download cancelled for ${asset.id}`);
             throw e;
         }
         finally
@@ -1181,6 +1303,21 @@ export class ImmichAPI
             ImmichAPI.downloadSemaphore.release();
             ImmichAPI.downloadsInFlight.delete(asset.id);
         }
+    }
+
+    private static isAbortError(e: unknown): boolean
+    {
+        if (!(e instanceof Error)) return false;
+        return e.name === 'AbortError' || e.name === 'CanceledError' || (e as any).code === 'ERR_CANCELED';
+    }
+
+    private static abortRejector(signal: AbortSignal): Promise<never>
+    {
+        return new Promise<never>((_, reject) =>
+            signal.addEventListener('abort', () =>
+                reject(Object.assign(new Error('Download cancelled'), { name: 'AbortError' })),
+            { once: true })
+        );
     }
     async SERVER_UploadNode(path: string, node: VirtualContentBuffer, mtime: number)
     {

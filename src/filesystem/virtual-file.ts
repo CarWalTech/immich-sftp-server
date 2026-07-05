@@ -30,7 +30,7 @@ export class VirtualFile extends VirtualNode
     {
         return;
     }
-    async event_readfile(): Promise<VirtualContentBuffer>
+    async event_readfile(_signal?: AbortSignal): Promise<VirtualContentBuffer>
     {
         const content = await this.get_content();
         return VirtualContentBufferUtils.bufferFromString(content)

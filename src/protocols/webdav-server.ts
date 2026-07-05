@@ -45,6 +45,10 @@ interface CachedUser {
 const SESSION_TTL_MS = 60 * 60 * 1000;
 const userCache = new Map<string, CachedUser>();
 
+// In-flight deduplication: prevents concurrent requests from spawning multiple
+// ImmichFileSystem login calls for the same credentials before the first resolves.
+const authInflight = new Map<string, Promise<ImmichWebdavUser>>();
+
 function pruneUserCache(): void {
   const cutoff = Date.now() - SESSION_TTL_MS;
   for (const [key, entry] of userCache) {
@@ -89,17 +93,31 @@ class ImmichWebdavUserManager implements webdav.ITestableUserManager {
       userCache.delete(username);
     }
 
+    // Deduplicate concurrent logins for the same credentials so a burst of
+    // incoming requests doesn't spawn multiple ImmichFileSystem sessions.
+    const inflightKey = `${username}\0${crypto.createHash('sha256').update(passwordBuf).digest('base64')}`;
+    const existing = authInflight.get(inflightKey);
+    if (existing) {
+      existing
+        .then(user => cbOk(callback, user))
+        .catch(() => callback(new Error('Authentication failed')));
+      return;
+    }
+
     const fsBackend = new ImmichFileSystem();
-    fsBackend
+    const promise = fsBackend
       .login(username, password)
-      .then(() => {
+      .then((): ImmichWebdavUser => {
         const user: ImmichWebdavUser = { uid: username, username, fsBackend };
         userCache.set(username, { user, passwordBuf, lastUsed: Date.now() });
-        cbOk(callback, user);
+        return user;
       })
-      .catch(() => {
-        callback(new Error('Authentication failed'));
-      });
+      .finally(() => authInflight.delete(inflightKey));
+
+    authInflight.set(inflightKey, promise);
+    promise
+      .then(user => cbOk(callback, user))
+      .catch(() => callback(new Error('Authentication failed')));
   }
 }
 
@@ -294,14 +312,34 @@ class ImmichWebdavFileSystem extends webdav.FileSystem {
 
     const p = normalizePath(path.toString());
 
-    backend.readFile(p)
+    // Tie the Immich download to the HTTP client's connection lifetime.
+    // When the client navigates away mid-download the 'close' event fires on
+    // the response socket, aborting the in-flight axios stream and releasing
+    // the download semaphore slot immediately.
+    const ctrl = new AbortController();
+    const res: import('http').ServerResponse | undefined = (ctx.context as any).response;
+    const onClose = () => ctrl.abort();
+    res?.once('close', onClose);
+
+    backend.readFile(p, ctrl.signal)
       .then(tmpFile => {
+        res?.removeListener('close', onClose);
+        if (ctrl.signal.aborted) {
+          // Client left before the download finished — discard and don't try to respond.
+          tmpFile.removeCallback();
+          return;
+        }
         const stream = tmpFile.createReadStream();
         stream.once('close', () => tmpFile.removeCallback());
         stream.once('error', () => tmpFile.removeCallback());
         cb(undefined, stream);
       })
-      .catch(err => cb(err));
+      .catch(err => {
+        res?.removeListener('close', onClose);
+        // Swallow abort errors — the client is already gone, nothing to respond to.
+        if (ctrl.signal.aborted) return;
+        cb(err);
+      });
   }
 
   // ── write stream (identical to SFTP tmp‑write) ──────────────
@@ -389,20 +427,43 @@ export class WebdavProtocolServer implements TransferProtocolServer {
   });
 
   async start(): Promise<void> {
-    this.server.beforeRequest((ctx, next) => {
-      if (ctx.request.method === 'PROPFIND') {
-        //logger.info('WebDAV', 'PROPFIND_REQ',
-        //`${ctx.request.method} ${ctx.request.url} Depth:${ctx.request.headers['depth'] ?? '?'} Host:${ctx.request.headers['host']}`);
-      }
-      next();
-    });
+    // Cap concurrent in-flight requests. Under extreme load this returns 503
+    // immediately rather than letting requests queue until NextCloud times out
+    // and reports the storage as disconnected.
+    const MAX_CONCURRENT = 50;
+    // If any single request takes longer than this, reply 503 and release the
+    // slot so other requests aren't starved.
+    const REQUEST_TIMEOUT_MS = 55_000;
 
-    this.server.afterRequest((ctx, next) => {
-      if (ctx.request.method === 'PROPFIND') {
-        const body = (ctx as any).responseBody ?? '';
-        //logger.info('WebDAV', 'PROPFIND_RES',
-        //`${ctx.response.statusCode} body:\n${body}`);
+    let activeRequests = 0;
+
+    this.server.beforeRequest((ctx, next) => {
+      if (activeRequests >= MAX_CONCURRENT) {
+        ctx.response.writeHead(503, { 'Retry-After': '5', 'Content-Type': 'text/plain' });
+        ctx.response.end('Server busy');
+        return;
       }
+
+      activeRequests++;
+
+      // Decrement on response completion or client disconnect — whichever fires first.
+      let settled = false;
+      const settle = () => {
+        if (!settled) { settled = true; activeRequests--; clearTimeout(timer); }
+      };
+      ctx.response.once('finish', settle);
+      ctx.response.once('close', settle);
+
+      const timer = setTimeout(() => {
+        logger.warn('WebDAV', 'TIMEOUT', `Request timed out: ${ctx.request.method} ${ctx.request.url}`);
+        try {
+          if (!ctx.response.writableEnded) {
+            ctx.response.writeHead(503, { 'Content-Type': 'text/plain' });
+            ctx.response.end('Request timeout');
+          }
+        } catch { /* already ended */ }
+      }, REQUEST_TIMEOUT_MS);
+
       next();
     });
 
@@ -412,6 +473,26 @@ export class WebdavProtocolServer implements TransferProtocolServer {
           reject(new Error('WebDAV server failed to start'));
           return;
         }
+
+        // Keep-alive slightly longer than a typical reverse-proxy (60 s) so the
+        // proxy never closes the connection first and causes spurious reconnects.
+        httpServer.keepAliveTimeout = 65_000;
+        // Give clients enough time to finish sending headers even on slow links.
+        httpServer.headersTimeout = 70_000;
+        // Hard ceiling on how long any single request may occupy a connection slot.
+        httpServer.requestTimeout = 60_000;
+        // Disable the idle socket timeout — we rely on keepAliveTimeout instead.
+        httpServer.timeout = 0;
+
+        // Prevent malformed client connections from throwing unhandled exceptions.
+        httpServer.on('error', (err: Error) => {
+          logger.error('WebDAV', 'SERVER_ERROR', `HTTP server error: ${err.message}`);
+        });
+        httpServer.on('clientError', (err: Error, socket: any) => {
+          logger.warn('WebDAV', 'CLIENT_ERROR', `Client socket error: ${err.message}`);
+          try { if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\n\r\n'); } catch { /* ignore */ }
+        });
+
         logger.info(`WebDAV`, 'SERVER', `WebDAV server listening on ${config.PROTOCOL_HOST}:${config.PROTOCOL_PORTS_WEBDAV}`);
         resolve();
       });

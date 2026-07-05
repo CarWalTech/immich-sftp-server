@@ -69,7 +69,7 @@ export class ImmichFileSystem implements VirtualFileSystem {
         this._listInflight.set(currentDir, promise);
         return promise;
     }
-    async readFile(filename: string) {
+    async readFile(filename: string, signal?: AbortSignal) {
         const tmp_result = await this.memory.read(filename)
         if (tmp_result) return tmp_result;
 
@@ -79,7 +79,7 @@ export class ImmichFileSystem implements VirtualFileSystem {
         logger.filesystem("ImmichFileSystem", "READ", `Reading file: ${filename}`)
 
         const file = (node as VirtualFile);
-        return await file.event_readfile();
+        return await file.event_readfile(signal);
     }
     async writeFile(filename: string, tmpFile: VirtualContentBuffer) {
         const is_tmp = await this.memory.write(filename, tmpFile)

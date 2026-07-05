@@ -19,7 +19,7 @@ export interface VirtualFileSystem
 {
     setAttributes(filename: string, mtime: number): Promise<void>;
     listFiles(currentDir: string): Promise<Array<VirtualMetadata>>;
-    readFile(filename: string): Promise<VirtualContentBuffer>;
+    readFile(filename: string, signal?: AbortSignal): Promise<VirtualContentBuffer>;
     writeFile(filename: string, tmpFile: VirtualContentBuffer): Promise<void>;
     stat(filename: string): Promise<VFSResponse<VirtualMetadata>>;
     rename(oldName: string, newName: string): Promise<boolean>;

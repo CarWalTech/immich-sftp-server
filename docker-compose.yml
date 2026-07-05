@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
       network: host
     container_name: immich-file-bridge
-    user: 82:82
+    user: 1000:1000
     env_file:
       - .env
     ports:
