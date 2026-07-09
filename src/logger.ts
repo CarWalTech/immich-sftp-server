@@ -102,7 +102,17 @@ export class SessionLogfileGenerator
                 .sort();
             const excess = folders.length - config.LOGS_MAX_SESSIONS;
             if (excess > 0)
-                folders.slice(0, excess).forEach(f => fs.rmSync(`${sessionsDir}/${f}`, { recursive: true }));
+                folders.slice(0, excess).forEach(f =>
+                {
+                    try
+                    {
+                        fs.rmSync(`${sessionsDir}/${f}`, { recursive: true });
+                    }
+                    catch (err)
+                    {
+                        console.error(`Failed to prune old session log folder '${sessionsDir}/${f}':`, err);
+                    }
+                });
 
             SessionLogfileGenerator._startup = true;
         }
