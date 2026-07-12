@@ -2,6 +2,7 @@ import Builder from 'fast-xml-builder';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { pipeline } from 'stream/promises';
 import tmp from 'tmp';
 import { exiftool } from 'exiftool-vendored';
 import YAML from 'yaml';
@@ -586,6 +587,20 @@ export function detectImageExtension(header: Buffer): string | null
     return null;
 }
 
+/** Stream a VirtualContentBuffer's contents to a file without materializing it as a single in-memory Buffer. */
+async function writeVcbToFile(vcb: VirtualContentBuffer, filePath: string): Promise<void>
+{
+    await pipeline(vcb.createReadStream(), fs.createWriteStream(filePath));
+}
+
+/** SHA-256 of a file, computed in chunks so hashing a large file doesn't block the event loop. */
+async function hashFileStreaming(filePath: string): Promise<string>
+{
+    const hash = crypto.createHash('sha256');
+    await pipeline(fs.createReadStream(filePath), hash);
+    return hash.digest('hex');
+}
+
 export async function embedXmpIntoImage(imageVcb: VirtualContentBuffer, xmpContent: string, _ext: string): Promise<VirtualContentBuffer>
 {
     const header = imageVcb.read(0, Math.min(12, imageVcb.size));
@@ -595,10 +610,10 @@ export async function embedXmpIntoImage(imageVcb: VirtualContentBuffer, xmpConte
     const xmpTmp = tmp.fileSync({ postfix: '.xmp', discardDescriptor: true, keep: false });
     try
     {
-        fs.writeFileSync(imageTmp.name, imageVcb.read(0, imageVcb.size));
-        fs.writeFileSync(xmpTmp.name, xmpContent, 'utf8');
+        await writeVcbToFile(imageVcb, imageTmp.name);
+        await fs.promises.writeFile(xmpTmp.name, xmpContent, 'utf8');
         await exiftool.write(imageTmp.name, {}, ['-tagsfromfile', xmpTmp.name, '-XMP:all']);
-        const result = fs.readFileSync(imageTmp.name);
+        const result = await fs.promises.readFile(imageTmp.name);
         return new VirtualContentBuffer(undefined, result);
     }
     finally
@@ -615,9 +630,9 @@ export async function extractXmpFromImage(imageVcb: VirtualContentBuffer, ext: s
     const xmpTmp = tmp.fileSync({ postfix: '.xmp', discardDescriptor: true, keep: false });
     try
     {
-        fs.writeFileSync(imageTmp.name, imageVcb.read(0, imageVcb.size));
+        await writeVcbToFile(imageVcb, imageTmp.name);
         await exiftool.write(xmpTmp.name, {}, ['-tagsfromfile', imageTmp.name, '-all:all', '-overwrite_original']);
-        return fs.readFileSync(xmpTmp.name, 'utf8');
+        return await fs.promises.readFile(xmpTmp.name, 'utf8');
     }
     finally
     {
@@ -632,9 +647,9 @@ async function mediaStreamDigest(imageVcb: VirtualContentBuffer, ext: string): P
     const imageTmp = tmp.fileSync({ postfix: ext, discardDescriptor: true, keep: false });
     try
     {
-        fs.writeFileSync(imageTmp.name, imageVcb.read(0, imageVcb.size));
+        await writeVcbToFile(imageVcb, imageTmp.name);
         await exiftool.write(imageTmp.name, {}, ['-all=', '-overwrite_original']);
-        return crypto.createHash('sha256').update(fs.readFileSync(imageTmp.name)).digest('hex');
+        return await hashFileStreaming(imageTmp.name);
     }
     finally
     {
@@ -650,9 +665,16 @@ export type EmbeddedMetadataWriteResult = 'applied' | 'unsupported-format' | 'co
  * embedded metadata — the underlying media stream must come back byte-identical once
  * metadata is stripped from both sides.  On success only the extracted metadata is pushed
  * to Immich; the asset's stored bytes are never replaced.
+ *
+ * Rejects anything above OPTION_MAX_METADATA_WRITE_SIZE up front: verifying content-identity
+ * requires buffering + hashing the whole file through exiftool, which for a large video would
+ * otherwise tie up a request slot (and the exiftool process pool) for a long time.
  */
 export async function applyEmbeddedAssetMetadataWrite(asset: ImmichAsset, originalVcb: VirtualContentBuffer, newVcb: VirtualContentBuffer, api: ImmichAPI): Promise<EmbeddedMetadataWriteResult>
 {
+    if (originalVcb.size > config.OPTION_MAX_METADATA_WRITE_SIZE || newVcb.size > config.OPTION_MAX_METADATA_WRITE_SIZE)
+        return 'unsupported-format';
+
     const header = originalVcb.read(0, Math.min(12, originalVcb.size));
     const ext = detectImageExtension(header) ?? detectImageExtension(newVcb.read(0, Math.min(12, newVcb.size)));
     if (!ext) return 'unsupported-format';

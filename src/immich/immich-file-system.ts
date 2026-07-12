@@ -39,7 +39,6 @@ export class ImmichFileSystem implements VirtualFileSystem {
         logger.filesystem("ImmichFileSystem", "LOGIN", `Login starting for user: ${username}`)
         return await this.immichApi.login(username, password)
     }
-
     async logout(): Promise<void> {
         logger.filesystem("ImmichFileSystem", "LOGOUT", `Logout starting for user: ${this.immichApi.getUser()?.id ?? 'unknown'}`)
         await this.immichApi.logout();

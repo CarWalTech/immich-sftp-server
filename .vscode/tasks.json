@@ -5,6 +5,7 @@
     "tasks": [
         {
             "label": "docker-run: debug",
+            "dependsOrder": "sequence",
             "dependsOn": [
                 "docker-compose: rm-debug",
                 "docker-compose: up-debug"

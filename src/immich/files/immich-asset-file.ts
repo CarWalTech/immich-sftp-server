@@ -1,4 +1,5 @@
 import path from "path";
+import { config } from "../../config";
 import { VirtualContentBuffer, VirtualContentBufferUtils } from "../../filesystem/virtual-content-buffer";
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
@@ -90,6 +91,15 @@ export class ImmichAssetFile extends ImmichVirtualFile
         if (!settings.assetAllowFileMetadataWrites)
         {
             logger.warn('ImmichAssetFile', 'event_writefile', `Blocked write to ${this.asset.id}: asset content is read-only. Edit the .xmp sidecar, or enable assetAllowFileMetadataWrites, to change metadata.`);
+            return false;
+        }
+
+        // Reject oversized writes before downloading the original — verifying
+        // content-identity requires buffering + hashing the whole file, which for a
+        // large video would otherwise tie up a request slot for a long time.
+        if (this.asset.fileSizeInByte > config.OPTION_MAX_METADATA_WRITE_SIZE || contents.size > config.OPTION_MAX_METADATA_WRITE_SIZE)
+        {
+            logger.warn('ImmichAssetFile', 'event_writefile', `Rejected write to ${this.asset.id}: file exceeds the metadata-write size limit.`);
             return false;
         }
 

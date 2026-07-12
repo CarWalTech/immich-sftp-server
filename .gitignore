@@ -5,6 +5,4 @@
 /readme-git.md
 /logs
 /runtime.log
-/.env.private
-/docker-compose.private.yml
-/.env.global
+/.private/*

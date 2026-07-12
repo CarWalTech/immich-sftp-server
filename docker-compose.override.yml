@@ -3,7 +3,7 @@ services:
     develop:
       watch:
         - action: rebuild
-          path: .
+          path: ${ROOT_DIR:-.}
     user: 1000:1000
     command: >
       ts-node-dev --inspect=0.0.0.0:9229 src/server.ts
@@ -12,8 +12,8 @@ services:
       - "22832:${SERVER_PROTOCOL_PORTS_SFTP}" # SFTP
       - "19000:${SERVER_PROTOCOL_PORTS_WEBDAV}" # WebDAV
     volumes:
-      - ./:/app
+      - ${ROOT_DIR:-.}:/app
     env_file:
-      - .env
+      - ${ROOT_DIR:-.}/.env
     environment:
       NODE_ENV: development
