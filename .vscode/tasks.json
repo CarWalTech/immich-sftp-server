@@ -16,7 +16,7 @@
             "options": {
                 "cwd": "${workspaceFolder}"
             },
-            "command": "docker compose -f docker-compose.yml -f docker-compose.override.yml up --build --force-recreate -d",
+            "command": "./scripts/docker-compose.sh -f docker-compose.override.yml up --build --force-recreate -d",
             "presentation": {
                 "close": true
             }
@@ -27,7 +27,7 @@
             "options": {
                 "cwd": "${workspaceFolder}"
             },
-            "command": "docker compose -f docker-compose.yml -f docker-compose.override.yml down",
+            "command": "./scripts/docker-compose.sh -f docker-compose.override.yml down",
             "presentation": {
                 "close": true
             }
@@ -38,7 +38,7 @@
             "options": {
                 "cwd": "${workspaceFolder}"
             },
-            "command": "docker compose -f docker-compose.yml up"
+            "command": "./scripts/docker-compose.sh up"
         },
         {
             "label": "docker-compose: build",
@@ -46,7 +46,7 @@
             "options": {
                 "cwd": "${workspaceFolder}"
             },
-            "command": "docker compose -f docker-compose.yml build"
+            "command": "./scripts/docker-compose.sh build"
         },
         {
             "label": "docker-compose: down",
@@ -54,7 +54,7 @@
             "options": {
                 "cwd": "${workspaceFolder}"
             },
-            "command": "docker compose -f docker-compose.yml down"
+            "command": "./scripts/docker-compose.sh down"
         },
         {
             "label": "docker-compose: rm",
@@ -62,7 +62,7 @@
             "options": {
                 "cwd": "${workspaceFolder}"
             },
-            "command": "docker compose -f docker-compose.yml rm"
+            "command": "./scripts/docker-compose.sh rm"
         },
         {
             "label": "docker-compose: logs",
