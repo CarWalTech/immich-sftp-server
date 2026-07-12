@@ -7,7 +7,7 @@ import { ImmichFileSystem } from "../immich-file-system";
 import { ImmichVirtualFile } from "../immich-virtual-file";
 import { getAssetMtime, ImmichAsset } from "../utils/immich-api-utils";
 import { deleteAssetFromContainer } from "../utils/immich-fs-utils";
-import { embedXmpIntoImage, saveAssetMetadataFileContent } from "../utils/immich-metadata-utils";
+import { applyEmbeddedAssetMetadataWrite, EmbeddedMetadataWriteResult, embedXmpIntoImage, saveAssetMetadataFileContent } from "../utils/immich-metadata-utils";
 
 export class ImmichAssetFile extends ImmichVirtualFile
 {
@@ -58,7 +58,12 @@ export class ImmichAssetFile extends ImmichVirtualFile
                 : await api.SERVER_GetAssetFileSize(this.asset);
         }
 
-        return VirtualMetadata.file_ro(this.name, size, getAssetMtime(this.asset));
+        // Content bytes are always immutable; only the mode bits move when in-place
+        // metadata edits are allowed, so clients don't refuse to open the file for saving.
+        const meta = settings.assetAllowFileMetadataWrites
+            ? VirtualMetadata.file_rw(this.name, size, getAssetMtime(this.asset))
+            : VirtualMetadata.file_ro(this.name, size, getAssetMtime(this.asset));
+        return meta;
     }
 
     async event_readfile(signal?: AbortSignal): Promise<VirtualContentBuffer>
@@ -75,6 +80,55 @@ export class ImmichAssetFile extends ImmichVirtualFile
         {
             logger.warn('ImmichAssetFile', 'event_readfile', `XMP embed failed for ${this.asset.id}: ${err}`);
             return raw;
+        }
+    }
+
+    async event_writefile(contents: VirtualContentBuffer): Promise<boolean>
+    {
+        const api = this.file_system.getApi();
+        const settings = api.getUserSettings();
+        if (!settings.assetAllowFileMetadataWrites)
+        {
+            logger.warn('ImmichAssetFile', 'event_writefile', `Blocked write to ${this.asset.id}: asset content is read-only. Edit the .xmp sidecar, or enable assetAllowFileMetadataWrites, to change metadata.`);
+            return false;
+        }
+
+        const raw = await api.SERVER_ReadAsset(this.asset);
+        // FETCH_AssetWithTags ensures current tags are correct even when the cache
+        // entry was populated from a search result that omitted the tags field.
+        const actual_asset = await api.FETCH_AssetWithTags(this.asset.id);
+
+        let result: EmbeddedMetadataWriteResult;
+        try
+        {
+            result = await applyEmbeddedAssetMetadataWrite(actual_asset, raw, contents, api);
+        }
+        catch (err)
+        {
+            if ((err as any)?.response?.status === 404)
+            {
+                // 404 typically means the asset is in a shared album owned by another
+                // user — the current API key cannot update it.  Return success so rclone
+                // does not mark the file dirty and retry in an infinite loop.
+                logger.warn('ImmichAssetFile', 'event_writefile',
+                    `Metadata write for asset ${actual_asset.id} returned 404 — asset may be owned by another user; update skipped`);
+                return true;
+            }
+            throw err;
+        }
+
+        switch (result)
+        {
+            case 'content-changed':
+                logger.warn('ImmichAssetFile', 'event_writefile', `Rejected write to ${this.asset.id}: the media stream itself changed. Only embedded-metadata edits are allowed; content changes are not synced back to Immich.`);
+                return false;
+            case 'unsupported-format':
+                logger.warn('ImmichAssetFile', 'event_writefile', `Rejected write to ${this.asset.id}: file type not supported for in-place metadata verification.`);
+                return false;
+            case 'applied':
+                api.CACHE_InvalidateAssetXMP(this.asset.id);
+                this.parent_directory.refresh();
+                return true;
         }
     }
 }

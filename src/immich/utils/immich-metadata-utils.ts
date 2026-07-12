@@ -1,4 +1,5 @@
 import Builder from 'fast-xml-builder';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import tmp from 'tmp';
@@ -557,7 +558,7 @@ export async function _syncAssetTagsFromXmp(asset: ImmichAsset, newTagValues: st
         await api.SERVER_RemoveAssetsFromTags(asset.id, toRemove)
 }
 
-function detectImageExtension(header: Buffer): string | null
+export function detectImageExtension(header: Buffer): string | null
 {
     if (header.length < 4) return null;
     // JPEG
@@ -605,6 +606,66 @@ export async function embedXmpIntoImage(imageVcb: VirtualContentBuffer, xmpConte
         imageTmp.removeCallback();
         xmpTmp.removeCallback();
     }
+}
+
+/** Read back all embedded metadata (EXIF/IPTC/XMP) from an image as an XMP sidecar document. */
+export async function extractXmpFromImage(imageVcb: VirtualContentBuffer, ext: string): Promise<string>
+{
+    const imageTmp = tmp.fileSync({ postfix: ext, discardDescriptor: true, keep: false });
+    const xmpTmp = tmp.fileSync({ postfix: '.xmp', discardDescriptor: true, keep: false });
+    try
+    {
+        fs.writeFileSync(imageTmp.name, imageVcb.read(0, imageVcb.size));
+        await exiftool.write(xmpTmp.name, {}, ['-tagsfromfile', imageTmp.name, '-all:all', '-overwrite_original']);
+        return fs.readFileSync(xmpTmp.name, 'utf8');
+    }
+    finally
+    {
+        imageTmp.removeCallback();
+        xmpTmp.removeCallback();
+    }
+}
+
+/** SHA-256 of the image with all metadata stripped — used to prove two files share the same media stream. */
+async function mediaStreamDigest(imageVcb: VirtualContentBuffer, ext: string): Promise<string>
+{
+    const imageTmp = tmp.fileSync({ postfix: ext, discardDescriptor: true, keep: false });
+    try
+    {
+        fs.writeFileSync(imageTmp.name, imageVcb.read(0, imageVcb.size));
+        await exiftool.write(imageTmp.name, {}, ['-all=', '-overwrite_original']);
+        return crypto.createHash('sha256').update(fs.readFileSync(imageTmp.name)).digest('hex');
+    }
+    finally
+    {
+        imageTmp.removeCallback();
+    }
+}
+
+export type EmbeddedMetadataWriteResult = 'applied' | 'unsupported-format' | 'content-changed';
+
+/**
+ * Accepts a client-side write to the asset file itself (e.g. digiKam/exiftool editing tags
+ * in place rather than through the .xmp sidecar).  The write is only allowed to change
+ * embedded metadata — the underlying media stream must come back byte-identical once
+ * metadata is stripped from both sides.  On success only the extracted metadata is pushed
+ * to Immich; the asset's stored bytes are never replaced.
+ */
+export async function applyEmbeddedAssetMetadataWrite(asset: ImmichAsset, originalVcb: VirtualContentBuffer, newVcb: VirtualContentBuffer, api: ImmichAPI): Promise<EmbeddedMetadataWriteResult>
+{
+    const header = originalVcb.read(0, Math.min(12, originalVcb.size));
+    const ext = detectImageExtension(header) ?? detectImageExtension(newVcb.read(0, Math.min(12, newVcb.size)));
+    if (!ext) return 'unsupported-format';
+
+    const [originalDigest, newDigest] = await Promise.all([
+        mediaStreamDigest(originalVcb, ext),
+        mediaStreamDigest(newVcb, ext),
+    ]);
+    if (originalDigest !== newDigest) return 'content-changed';
+
+    const xmp = await extractXmpFromImage(newVcb, ext);
+    await saveAssetMetadataFileContent(asset, xmp, api);
+    return 'applied';
 }
 
 export async function saveAssetMetadataFileContent(asset: ImmichAsset, contents: string, api: ImmichAPI): Promise<void>

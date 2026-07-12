@@ -42,6 +42,7 @@ export class Config
   // server user defaults
   USERDEFAULTS_ASSET_ENABLE_SIDECAR_FILES: boolean
   USERDEFAULTS_ASSET_EMBED_METADATA: boolean
+  USERDEFAULTS_ASSET_ALLOW_FILE_METADATA_WRITES: boolean
   USERDEFAULTS_ASSET_FILEPATTERN: AssetFileNamePattern
   USERDEFAULTS_ASSET_DOWNLOAD_SOURCE: AssetDownloadSource
   USERDEFAULTS_ALBUM_SUBFOLDER_PATTERN: string
@@ -85,6 +86,7 @@ export class Config
     // server user defaults
     this.USERDEFAULTS_ASSET_ENABLE_SIDECAR_FILES = getEnvBoolean('SERVER_USERDEFAULTS_ASSET_ENABLE_SIDECAR_FILES', true);
     this.USERDEFAULTS_ASSET_EMBED_METADATA = getEnvBoolean('SERVER_USERDEFAULTS_ASSET_EMBED_METADATA', false);
+    this.USERDEFAULTS_ASSET_ALLOW_FILE_METADATA_WRITES = getEnvBoolean('SERVER_USERDEFAULTS_ASSET_ALLOW_FILE_METADATA_WRITES', false);
     this.USERDEFAULTS_ASSET_FILEPATTERN = parseAssetFileNamePattern(getOptionalEnv('SERVER_USERDEFAULTS_ASSET_FILEPATTERN')) ?? 'original';
     this.USERDEFAULTS_ASSET_DOWNLOAD_SOURCE = parseAssetDownloadSource(getOptionalEnv('SERVER_USERDEFAULTS_ASSET_DOWNLOAD_SOURCE')) ?? 'original';
     this.USERDEFAULTS_ALBUM_SUBFOLDER_PATTERN = getEnvOrDefault('SERVER_USERDEFAULTS_ALBUM_SUBFOLDER_PATTERN', " / ");
@@ -102,6 +104,7 @@ export interface UserConfig
   assetDownloadSource: AssetDownloadSource
   assetSidecarsEnabled: boolean
   assetEmbedMetadata: boolean
+  assetAllowFileMetadataWrites: boolean
   enableAlbumLinks: boolean
   enableAlbumMetadata: boolean
   enableTrashLink: boolean
@@ -140,6 +143,7 @@ export class UserConfigLoader
     const envSubAlbumSeperator = getOptionalNestedString(json, ['subAlbumSeperator'], false)
     const envEnableSidecarFiles = getOptionalNestedBoolean(json, ['assetSidecarsEnabled'])
     const envEmbedMetadata = getOptionalNestedBoolean(json, ['assetEmbedMetadata'])
+    const envAllowFileMetadataWrites = getOptionalNestedBoolean(json, ['assetAllowFileMetadataWrites'])
     const envEnableAlbumLinks = getOptionalNestedBoolean(json, ['enableAlbumLinks'])
     const envEnableAlbumMetadata = getOptionalNestedBoolean(json, ['enableAlbumMetadata'])
     const envEnableTrashLink = getOptionalNestedBoolean(json, ['enableTrashLink'])
@@ -150,6 +154,7 @@ export class UserConfigLoader
       assetFileNamePattern: envFileNamePattern ?? this.DEFAULTS.assetFileNamePattern,
       assetSidecarsEnabled: getBoolOrDefault(envEnableSidecarFiles, this.DEFAULTS.assetSidecarsEnabled),
       assetEmbedMetadata: getBoolOrDefault(envEmbedMetadata, this.DEFAULTS.assetEmbedMetadata),
+      assetAllowFileMetadataWrites: getBoolOrDefault(envAllowFileMetadataWrites, this.DEFAULTS.assetAllowFileMetadataWrites),
       enableAlbumLinks: getBoolOrDefault(envEnableAlbumLinks, this.DEFAULTS.enableAlbumLinks),
       enableAlbumMetadata: getBoolOrDefault(envEnableAlbumMetadata, this.DEFAULTS.enableAlbumMetadata),
       enableTrashLink: getBoolOrDefault(envEnableTrashLink, this.DEFAULTS.enableTrashLink),
@@ -165,6 +170,7 @@ export class UserConfigLoader
       assetDownloadSource: config.USERDEFAULTS_ASSET_DOWNLOAD_SOURCE,
       assetSidecarsEnabled: config.USERDEFAULTS_ASSET_ENABLE_SIDECAR_FILES,
       assetEmbedMetadata: config.USERDEFAULTS_ASSET_EMBED_METADATA,
+      assetAllowFileMetadataWrites: config.USERDEFAULTS_ASSET_ALLOW_FILE_METADATA_WRITES,
       enableAlbumLinks: config.USERDEFAULTS_ENABLE_ALBUM_LINKS,
       enableAlbumMetadata: config.USERDEFAULTS_ENABLE_ALBUM_METADATA,
       enableTrashLink: config.USERDEFAULTS_ENABLE_TRASH_LINK,
