@@ -18,5 +18,6 @@
       "Bash(find /omv/apps-compose/immich-file-bridge -name \"*.json\" -path \"*/.vscode/*\" 2>/dev/null && find /home/ec2-user -name \"settings.json\" -path \"*vscode*\" 2>/dev/null | head -5)",
       "Read(//home/ec2-user/**)"
     ]
-  }
+  },
+  "showThinkingSummaries": true
 }

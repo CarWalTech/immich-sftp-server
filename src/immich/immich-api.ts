@@ -1353,7 +1353,9 @@ export class ImmichAPI
             logAction: 'Restore asset'
         });
 
-        this.cache.invalidateAssets([assetId]);
+        // See SERVER_UpdateAsset: refresh in place instead of invalidateAssets(), which
+        // would leave the asset as a phantom member of any already-cached list.
+        await this.FETCH_Asset(assetId);
     }
     async SERVER_UpdateAsset(assetId: string, patch: Record<string, unknown>)
     {
@@ -1363,7 +1365,13 @@ export class ImmichAPI
             data: JSON.stringify(patch),
             logAction: 'Update asset metadata from XMP',
         });
-        this.cache.invalidateAssets([assetId]);
+        // Refresh in place rather than invalidateAssets(): deleting the assetInfoCache
+        // entry here would leave the asset's ID as a phantom member of every album/
+        // directory list that already cached it (those lists are only re-validated via
+        // the parent album's updatedAt, which this PATCH does not change), permanently
+        // hiding the asset from directory listings. See immich-asset-file.ts's XMP
+        // sidecar write path for the same rationale.
+        await this.FETCH_Asset(assetId);
     }
     async SERVER_RemoveAssetsFromTags(assetId: string, toRemove: string[])
     {
