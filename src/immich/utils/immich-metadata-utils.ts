@@ -300,6 +300,7 @@ export function generateAssetMetadataDocument(asset: ImmichAsset, existingSideca
 
     const immichDescription = typeof exif.description === 'string' ? exif.description : '';
     const immichCreateDate = exif.dateTimeOriginal ?? asset.fileCreatedAt ?? '';
+    const rating = typeof exif.rating === 'number' ? exif.rating : undefined;
     const lat = typeof exif.latitude === 'number' ? exif.latitude : undefined;
     const lon = typeof exif.longitude === 'number' ? exif.longitude : undefined;
     const make = typeof exif.make === 'string' ? exif.make : '';
@@ -350,6 +351,7 @@ export function generateAssetMetadataDocument(asset: ImmichAsset, existingSideca
         };
 
     if (immichCreateDate) descNode['xmp:CreateDate'] = immichCreateDate;
+    if (rating !== undefined) descNode['xmp:Rating'] = rating;
 
     if (make) descNode['tiff:Make'] = make;
     if (model) descNode['tiff:Model'] = model;
