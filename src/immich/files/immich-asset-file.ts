@@ -2,6 +2,7 @@ import path from "path";
 import { config } from "../../config";
 import { VirtualContentBuffer, VirtualContentBufferUtils } from "../../filesystem/virtual-content-buffer";
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
+import { RangeReadResult, RangeSpec } from "../../filesystem/virtual-file-system";
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { logger } from "../../logger";
 import { ImmichFileSystem } from "../immich-file-system";
@@ -65,6 +66,17 @@ export class ImmichAssetFile extends ImmichVirtualFile
             ? VirtualMetadata.file_rw(this.name, size, getAssetMtime(this.asset))
             : VirtualMetadata.file_ro(this.name, size, getAssetMtime(this.asset));
         return meta;
+    }
+
+    async event_readfile_range(range: RangeSpec, signal?: AbortSignal): Promise<RangeReadResult | null>
+    {
+        const settings = this.file_system.getApi().getUserSettings();
+        // Embedding rewrites the file's bytes (XMP block insertion shifts every offset
+        // after it), so a raw byte-range read against the original can't be trusted —
+        // fall back to a full read (which re-embeds, then serves the whole thing).
+        if (settings.assetEmbedMetadata) return null;
+
+        return await this.file_system.getApi().SERVER_ReadAssetRange(this.asset, range, signal);
     }
 
     async event_readfile(signal?: AbortSignal): Promise<VirtualContentBuffer>

@@ -12,6 +12,7 @@ import { pipeline } from 'stream/promises';
 import { DownloadSemaphore } from '../classes/download-semaphore';
 import { config, UserConfig, UserConfigLoader } from "../config";
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
+import { RangeReadResult, RangeSpec } from "../filesystem/virtual-file-system";
 import { logger } from '../logger';
 import { isObjectWithId } from "../utils/common-utils";
 import { DateUtils } from '../utils/date-utils';
@@ -1303,6 +1304,107 @@ export class ImmichAPI
             ImmichAPI.downloadSemaphore.release();
             ImmichAPI.downloadsInFlight.delete(asset.id);
         }
+    }
+
+    // True byte-range pass-through for GET Range requests (video seeking, partial
+    // reads). Unlike SERVER_ReadAsset, this never buffers the whole asset: it serves
+    // straight out of an already-cached in-memory buffer, reads directly off local
+    // disk in local-file mode, or proxies the Range header straight through to Immich.
+    // Returns null when the range can't be honored (Immich ignored the Range header
+    // and sent the full body) so the caller can fall back to a full read.
+    async SERVER_ReadAssetRange(asset: ImmichAsset, range: RangeSpec, signal?: AbortSignal): Promise<RangeReadResult | null>
+    {
+        const resolveAgainst = (total: number): { start: number; end: number } =>
+        {
+            if (range.suffixLength !== undefined)
+            {
+                const length = Math.min(range.suffixLength, total);
+                return { start: total - length, end: total - 1 };
+            }
+            const start = range.start ?? 0;
+            const end = Math.min(range.end ?? (total - 1), total - 1);
+            return { start, end };
+        };
+
+        // 1. Already-cached in-memory buffer — instant slice, no network at all.
+        //    Only assets <= OPTION_MAX_CACHE_BUFFER are ever buffer-backed.
+        const cached = this.cache.assetFileBuffers.get(asset.id) ?? ImmichAPI.CACHE_GetShared(asset.id);
+        if (cached?.isBuffer)
+        {
+            const total = cached.size;
+            const { start, end } = resolveAgainst(total);
+            const data = cached.read(start, end - start + 1);
+            return { stream: Readable.from(data), start, end, total };
+        }
+
+        // 2. Local file mode — direct disk range read, no Immich round trip at all.
+        if (config.OPTION_ENABLE_LOCAL_FILES)
+        {
+            const filepath = "/immich" + asset.originalPath;
+            const total = (await fs.promises.stat(filepath)).size;
+            const { start, end } = resolveAgainst(total);
+            return { stream: fs.createReadStream(filepath, { start, end }), start, end, total };
+        }
+
+        // 3. Proxy the byte-range straight through to Immich — no buffering, no
+        //    shared-cache participation (a seek touches a different slice every time,
+        //    so caching a slice would be useless).
+        const endpoint = this.userSettings.assetDownloadSource === 'preview'
+            ? `assets/${asset.id}/preview`
+            : `assets/${asset.id}/original`;
+
+        const rangeHeaderValue = range.suffixLength !== undefined
+            ? `bytes=-${range.suffixLength}`
+            : `bytes=${range.start ?? 0}-${range.end ?? ''}`;
+
+        // Bounds concurrent outbound Immich requests the same way full downloads do;
+        // released once the response headers are in rather than held for the whole
+        // transfer, so one slow scrub doesn't starve other interactive range reads.
+        await ImmichAPI.downloadSemaphore.acquire('high');
+        let response;
+        try
+        {
+            response = await axios.request({
+                method: 'GET',
+                url: `${this.baseUrl}/api/${endpoint}`,
+                timeout: 30_000,
+                signal,
+                headers: {
+                    'User-Agent': 'ImmichNetworkStorage (Linux)',
+                    'Range': rangeHeaderValue,
+                    ...(this.authMode === 'api-key'
+                        ? { 'x-api-key': this.immichAccessToken }
+                        : { 'Authorization': `Bearer ${this.immichAccessToken}` }),
+                },
+                responseType: 'stream',
+            });
+        }
+        finally
+        {
+            ImmichAPI.downloadSemaphore.release();
+        }
+
+        const stream: Readable = response.data;
+        const contentRange = response.headers['content-range'] as string | undefined;
+
+        if (response.status !== 206 || !contentRange)
+        {
+            // Immich ignored the Range and sent the full body — not worth slicing a
+            // stream we can't seek; let the caller fall back to a full read.
+            stream.destroy();
+            return null;
+        }
+
+        const match = /bytes (\d+)-(\d+)\/(\d+)/.exec(contentRange);
+        if (!match)
+        {
+            stream.destroy();
+            return null;
+        }
+
+        logger.debug(`ImmichAPI`, 'SERVER_ReadAssetRange', `Ranged download ${asset.id} via ${endpoint}: ${contentRange}`);
+
+        return { stream, start: Number(match[1]), end: Number(match[2]), total: Number(match[3]) };
     }
 
     private static isAbortError(e: unknown): boolean

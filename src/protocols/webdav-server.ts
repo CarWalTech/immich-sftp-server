@@ -10,11 +10,12 @@ import tmp from 'tmp';
 import { v2 as webdav } from 'webdav-server';
 import { config } from '../config';
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
-import { VirtualFileSystem } from '../filesystem/virtual-file-system';
+import { RangeReadResult, RangeSpec, VirtualFileSystem } from '../filesystem/virtual-file-system';
 import { ImmichFileSystem } from '../immich/immich-file-system';
 import { logger } from '../logger';
 import { Timestamp } from '../utils/date-utils';
 import '../utils/webdav-server-proppatch-patch';
+import '../utils/webdav-server-range-patch';
 import '../utils/xml-js-builder-patch';
 import { TransferProtocolServer } from './transfer-protocol-server';
 
@@ -339,6 +340,44 @@ class ImmichWebdavFileSystem extends webdav.FileSystem {
         res?.removeListener('close', onClose);
         // Swallow abort errors — the client is already gone, nothing to respond to.
         if (ctrl.signal.aborted) return;
+        cb(err);
+      });
+  }
+
+  // ── ranged read (true byte-range pass-through, see webdav-server-range-patch) ──
+
+  // Not part of webdav.FileSystem's abstract surface — invoked reflectively by the
+  // Get.js patch, which feature-detects this method before using it.
+  openRangeReadStream(
+    context: webdav.RequestContext,
+    path: webdav.Path,
+    range: RangeSpec,
+    cb: (err: Error | null, result?: RangeReadResult) => void,
+  ): void {
+    const user = context.user as ImmichWebdavUser | undefined;
+    const backend = user?.fsBackend;
+    if (!backend?.readFileRange) { cb(new Error('Range reads not supported')); return; }
+
+    const p = normalizePath(path.toString());
+
+    const ctrl = new AbortController();
+    const res: import('http').ServerResponse | undefined = (context as any).response;
+    const onClose = () => ctrl.abort();
+    res?.once('close', onClose);
+
+    backend.readFileRange(p, range, ctrl.signal)
+      .then(result => {
+        res?.removeListener('close', onClose);
+        if (ctrl.signal.aborted) {
+          if (result) (result.stream as any).destroy?.();
+          return;
+        }
+        if (!result) { cb(null, undefined); return; }
+        cb(null, result);
+      })
+      .catch(err => {
+        res?.removeListener('close', onClose);
+        if (ctrl.signal.aborted) { cb(null, undefined); return; }
         cb(err);
       });
   }

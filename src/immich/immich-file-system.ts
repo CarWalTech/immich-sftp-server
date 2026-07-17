@@ -2,7 +2,7 @@ import { config } from '../config';
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
 import { VirtualDirectory } from "../filesystem/virtual-directory";
 import { VirtualFile } from "../filesystem/virtual-file";
-import { VFSResponse, VirtualFileSystem } from "../filesystem/virtual-file-system";
+import { RangeReadResult, RangeSpec, VFSResponse, VirtualFileSystem } from "../filesystem/virtual-file-system";
 import { VirtualMetadata } from "../filesystem/virtual-metadata";
 import type { VirtualPathInfo } from "../filesystem/virtual-path-info";
 import { logger } from "../logger";
@@ -79,6 +79,16 @@ export class ImmichFileSystem implements VirtualFileSystem {
 
         const file = (node as VirtualFile);
         return await file.event_readfile(signal);
+    }
+    async readFileRange(filename: string, range: RangeSpec, signal?: AbortSignal): Promise<RangeReadResult | null>
+    {
+        const { node } = await VirtualFsUtils.resolvePath(this.root, filename);
+        if (!node || node.isDir()) throw new Error(`Not a file: ${filename}`);
+
+        logger.filesystem("ImmichFileSystem", "READ_RANGE", `Reading file range: ${filename}`)
+
+        const file = (node as VirtualFile);
+        return await file.event_readfile_range(range, signal);
     }
     async writeFile(filename: string, tmpFile: VirtualContentBuffer) {
         const is_tmp = await this.memory.write(filename, tmpFile)
