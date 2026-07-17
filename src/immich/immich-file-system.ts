@@ -2,7 +2,7 @@ import { config } from '../config';
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
 import { VirtualDirectory } from "../filesystem/virtual-directory";
 import { VirtualFile } from "../filesystem/virtual-file";
-import { RangeReadResult, RangeSpec, VFSResponse, VirtualFileSystem } from "../filesystem/virtual-file-system";
+import { RangeReadResult, RangeSpec, StreamReadResult, VFSResponse, VirtualFileSystem } from "../filesystem/virtual-file-system";
 import { VirtualMetadata } from "../filesystem/virtual-metadata";
 import type { VirtualPathInfo } from "../filesystem/virtual-path-info";
 import { logger } from "../logger";
@@ -89,6 +89,16 @@ export class ImmichFileSystem implements VirtualFileSystem {
 
         const file = (node as VirtualFile);
         return await file.event_readfile_range(range, signal);
+    }
+    async readFileStream(filename: string, signal?: AbortSignal): Promise<StreamReadResult | null>
+    {
+        const { node } = await VirtualFsUtils.resolvePath(this.root, filename);
+        if (!node || node.isDir()) throw new Error(`Not a file: ${filename}`);
+
+        logger.filesystem("ImmichFileSystem", "READ_STREAM", `Streaming file: ${filename}`)
+
+        const file = (node as VirtualFile);
+        return await file.event_readfile_stream(signal);
     }
     async writeFile(filename: string, tmpFile: VirtualContentBuffer) {
         const is_tmp = await this.memory.write(filename, tmpFile)
@@ -415,7 +425,10 @@ export class ImmichFileSystemMemory {
         const entry = this.find(oldName);
 
         if (!entry) {
-            logger.error("ImmichWritableMemory", "Rename", `Not found: ${oldName}`)
+            // Expected for the common case: renaming/moving an already-uploaded asset
+            // is never in this in-memory pending-upload table. The caller falls through
+            // to the real backend rename right after this returns false — not an error.
+            logger.debug("ImmichWritableMemory", "Rename", `Not a pending upload, falling through: ${oldName}`)
             return false;
         }
         if (this.entries.find(e => e.longname === newName)) {

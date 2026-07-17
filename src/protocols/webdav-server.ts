@@ -323,17 +323,30 @@ class ImmichWebdavFileSystem extends webdav.FileSystem {
     const onClose = () => ctrl.abort();
     res?.once('close', onClose);
 
-    backend.readFile(p, ctrl.signal)
-      .then(tmpFile => {
+    // Prefer a true streaming pass-through — bytes reach the client as they arrive
+    // instead of only after the whole asset is buffered/downloaded first. Falls back
+    // to the buffered readFile() path when streaming isn't available or applicable
+    // (already cached, embedded-metadata mode, concurrent download already in flight).
+    const resolveStream = async (): Promise<Readable> => {
+      if (backend.readFileStream) {
+        const streamed = await backend.readFileStream(p, ctrl.signal);
+        if (streamed) return streamed.stream as Readable;
+      }
+      const tmpFile = await backend.readFile(p, ctrl.signal);
+      const stream = tmpFile.createReadStream();
+      stream.once('close', () => tmpFile.removeCallback());
+      stream.once('error', () => tmpFile.removeCallback());
+      return stream;
+    };
+
+    resolveStream()
+      .then(stream => {
         res?.removeListener('close', onClose);
         if (ctrl.signal.aborted) {
           // Client left before the download finished — discard and don't try to respond.
-          tmpFile.removeCallback();
+          (stream as any).destroy?.();
           return;
         }
-        const stream = tmpFile.createReadStream();
-        stream.once('close', () => tmpFile.removeCallback());
-        stream.once('error', () => tmpFile.removeCallback());
         cb(undefined, stream);
       })
       .catch(err => {

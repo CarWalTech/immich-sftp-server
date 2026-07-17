@@ -31,6 +31,12 @@ export interface RangeReadResult
     total: number; // total size of the underlying asset
 }
 
+export interface StreamReadResult
+{
+    stream: NodeJS.ReadableStream;
+    contentLength: number;
+}
+
 // Interface: VirtualFileSystem
 export interface VirtualFileSystem
 {
@@ -40,6 +46,10 @@ export interface VirtualFileSystem
     // Optional: true byte-range pass-through for GET Range requests (video seeking,
     // partial reads). Returning null tells the caller to fall back to a full readFile().
     readFileRange?(filename: string, range: RangeSpec, signal?: AbortSignal): Promise<RangeReadResult | null>;
+    // Optional: streaming pass-through for plain (non-range) GETs — bytes reach the
+    // caller as they arrive instead of only after the whole asset is buffered/downloaded.
+    // Returning null tells the caller to fall back to a full readFile().
+    readFileStream?(filename: string, signal?: AbortSignal): Promise<StreamReadResult | null>;
     writeFile(filename: string, tmpFile: VirtualContentBuffer): Promise<void>;
     stat(filename: string): Promise<VFSResponse<VirtualMetadata>>;
     rename(oldName: string, newName: string): Promise<boolean>;

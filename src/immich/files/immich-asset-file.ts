@@ -2,7 +2,7 @@ import path from "path";
 import { config } from "../../config";
 import { VirtualContentBuffer, VirtualContentBufferUtils } from "../../filesystem/virtual-content-buffer";
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
-import { RangeReadResult, RangeSpec } from "../../filesystem/virtual-file-system";
+import { RangeReadResult, RangeSpec, StreamReadResult } from "../../filesystem/virtual-file-system";
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { logger } from "../../logger";
 import { ImmichFileSystem } from "../immich-file-system";
@@ -77,6 +77,16 @@ export class ImmichAssetFile extends ImmichVirtualFile
         if (settings.assetEmbedMetadata) return null;
 
         return await this.file_system.getApi().SERVER_ReadAssetRange(this.asset, range, signal);
+    }
+
+    async event_readfile_stream(signal?: AbortSignal): Promise<StreamReadResult | null>
+    {
+        const settings = this.file_system.getApi().getUserSettings();
+        // Embedding rewrites the file's bytes, so it needs the whole thing in memory
+        // before anything can be served — fall back to the buffered read+embed path.
+        if (settings.assetEmbedMetadata) return null;
+
+        return await this.file_system.getApi().SERVER_ReadAssetStream(this.asset, signal);
     }
 
     async event_readfile(signal?: AbortSignal): Promise<VirtualContentBuffer>

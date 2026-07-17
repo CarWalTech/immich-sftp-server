@@ -3,7 +3,7 @@ import { Timestamp } from "../utils/date-utils";
 import { VirtualContentBuffer, VirtualContentBufferUtils } from "./virtual-content-buffer";
 import { VirtualMetadata } from './virtual-metadata';
 import { VirtualNode } from "./virtual-node";
-import { RangeReadResult, RangeSpec } from "./virtual-file-system";
+import { RangeReadResult, RangeSpec, StreamReadResult } from "./virtual-file-system";
 
 export class VirtualFile extends VirtualNode
 {
@@ -38,6 +38,11 @@ export class VirtualFile extends VirtualNode
     }
     // Default: no range support. Callers fall back to a full event_readfile() + in-memory slice.
     async event_readfile_range(_range: RangeSpec, _signal?: AbortSignal): Promise<RangeReadResult | null>
+    {
+        return null;
+    }
+    // Default: no streaming support. Callers fall back to a full event_readfile().
+    async event_readfile_stream(_signal?: AbortSignal): Promise<StreamReadResult | null>
     {
         return null;
     }

@@ -7,12 +7,12 @@ import tmp from "tmp";
 import isValidFilename from 'valid-filename';
 
 import { DateTime } from 'luxon';
-import { Readable } from "stream";
+import { PassThrough, Readable } from "stream";
 import { pipeline } from 'stream/promises';
 import { DownloadSemaphore } from '../classes/download-semaphore';
 import { config, UserConfig, UserConfigLoader } from "../config";
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
-import { RangeReadResult, RangeSpec } from "../filesystem/virtual-file-system";
+import { RangeReadResult, RangeSpec, StreamReadResult } from "../filesystem/virtual-file-system";
 import { logger } from '../logger';
 import { isObjectWithId } from "../utils/common-utils";
 import { DateUtils } from '../utils/date-utils';
@@ -1304,6 +1304,99 @@ export class ImmichAPI
             ImmichAPI.downloadSemaphore.release();
             ImmichAPI.downloadsInFlight.delete(asset.id);
         }
+    }
+
+    // Streaming pass-through for plain (non-range) GETs. Unlike SERVER_ReadAsset, this
+    // never buffers the whole asset before the caller sees any bytes: it streams
+    // straight off local disk in local-file mode, or straight through from Immich
+    // otherwise. Small results are still tee'd into the shared buffer cache in the
+    // background so repeat reads stay instant. Returns null when there's nothing to
+    // gain (already cached) or when a concurrent SERVER_ReadAsset download for the same
+    // asset is already in flight — riding along that dedup is better than starting a
+    // second, uncoordinated download.
+    async SERVER_ReadAssetStream(asset: ImmichAsset, signal?: AbortSignal): Promise<StreamReadResult | null>
+    {
+        if (this.cache.assetFileBuffers.has(asset.id)) return null;
+        if (ImmichAPI.CACHE_GetShared(asset.id)) return null;
+
+        if (config.OPTION_ENABLE_LOCAL_FILES)
+        {
+            const filepath = "/immich" + asset.originalPath;
+            const total = (await fs.promises.stat(filepath)).size;
+            const stream = fs.createReadStream(filepath, signal ? { signal } : undefined);
+            this.maybeCacheSmallStream(asset.id, stream, total);
+            return { stream, contentLength: total };
+        }
+
+        if (ImmichAPI.downloadsInFlight.has(asset.id)) return null;
+
+        const endpoint = this.userSettings.assetDownloadSource === 'preview'
+            ? `assets/${asset.id}/preview`
+            : `assets/${asset.id}/original`;
+
+        await ImmichAPI.downloadSemaphore.acquire();
+        let response;
+        try
+        {
+            response = await axios.request({
+                method: 'GET',
+                url: `${this.baseUrl}/api/${endpoint}`,
+                timeout: 30_000,
+                signal,
+                headers: {
+                    'User-Agent': 'ImmichNetworkStorage (Linux)',
+                    ...(this.authMode === 'api-key'
+                        ? { 'x-api-key': this.immichAccessToken }
+                        : { 'Authorization': `Bearer ${this.immichAccessToken}` }),
+                },
+                responseType: 'stream',
+            });
+        }
+        catch (e)
+        {
+            ImmichAPI.downloadSemaphore.release();
+            throw e;
+        }
+
+        const contentLength = parseInt(response.headers['content-length'] ?? '0', 10);
+        const stream: Readable = response.data;
+
+        // Release the semaphore as soon as the transfer is spoken for, rather than
+        // holding it for the whole streaming duration — a slow client shouldn't starve
+        // other downloads waiting on the same shared limit.
+        let released = false;
+        const release = () => { if (!released) { released = true; ImmichAPI.downloadSemaphore.release(); } };
+        stream.once('end', release);
+        stream.once('error', release);
+        stream.once('close', release);
+
+        this.maybeCacheSmallStream(asset.id, stream, contentLength);
+
+        logger.debug(`ImmichAPI`, 'SERVER_ReadAssetStream', `Streaming ${asset.id} via ${endpoint}, Content-Length=${contentLength}`);
+
+        return { stream, contentLength };
+    }
+
+    // Tees a stream so the caller gets it live while a background copy accumulates for
+    // the shared cache — only worth it for assets small enough to buffer (matches the
+    // same OPTION_MAX_CACHE_BUFFER cutoff SERVER_ReadAsset uses).
+    private maybeCacheSmallStream(assetId: string, stream: NodeJS.ReadableStream, contentLength: number): void
+    {
+        if (!(contentLength > 0 && contentLength <= config.OPTION_MAX_CACHE_BUFFER)) return;
+
+        const chunks: Buffer[] = [];
+        const collector = new PassThrough();
+        collector.on('data', (chunk: Buffer) => chunks.push(chunk));
+        collector.on('end', () =>
+        {
+            const buf = Buffer.concat(chunks);
+            if (buf.length !== contentLength) return; // truncated/aborted — don't cache a partial copy
+            const node = new VirtualContentBuffer(undefined, buf);
+            ImmichAPI.CACHE_SetShared(assetId, node);
+            this.cache.assetFileBuffers.set(assetId, node);
+        });
+        collector.on('error', () => { /* best-effort cache population; safe to ignore */ });
+        (stream as Readable).pipe(collector);
     }
 
     // True byte-range pass-through for GET Range requests (video seeking, partial
