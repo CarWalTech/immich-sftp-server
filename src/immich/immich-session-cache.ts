@@ -90,8 +90,14 @@ export class ImmichAssetFileSizeCache
 
 export class ImmichSessionCache
 {
-    // Stores raw asset byte data
+    // Stores raw asset byte data. Unlike ImmichAPI.sharedBufferCache, this map is
+    // per-(user,view) and lives for the process lifetime — it is NOT released by the
+    // WebDAV session idle-timeout while the session stays active, so it needs its own
+    // real byte budget + LRU eviction (see setAssetBuffer below) rather than relying on
+    // eventual session eviction to bound it.
     assetFileBuffers: Map<string, VirtualContentBuffer>;
+    // The amount of bytes in the asset file buffer
+    private assetFileBuffersBytes = 0;
     // Store asset file sizes
     assetFileSizeCache: ImmichAssetFileSizeCache;
     // Stores raw asset data — no connection-specific references.
@@ -312,7 +318,6 @@ export class ImmichSessionCache
         }
         return this.inFlightAlbumsListFetch;
     }
-
     public async fetchCachedAsset(assetId: string, { fetchMeta, fetchData }: { fetchMeta?: () => Promise<{ updatedAt?: string }>; fetchData: () => Promise<ImmichAsset> }): Promise<ImmichAsset>
     {
         const inflight = this.inFlightAssetFetches.get(assetId);
@@ -554,7 +559,6 @@ export class ImmichSessionCache
             this.assetInfoCache.set(assetId, { ...cached, data: { ...cached.data, tags: undefined } });
         this.xmpCache.delete(assetId);
     }
-
     public invalidateAssets(assetIds: string[])
     {
         for (const id of assetIds)
@@ -562,9 +566,7 @@ export class ImmichSessionCache
             this.assetInfoCache.delete(id);
             this.assetFileSizeCache.delete(id);
             this.xmpCache.delete(id);
-            const buf = this.assetFileBuffers.get(id);
-            if (buf?.isTmp) buf.removeCallback();
-            this.assetFileBuffers.delete(id);
+            this.evictAssetBuffer(id);
         }
         this.scheduleSave();
     }
@@ -585,13 +587,6 @@ export class ImmichSessionCache
             if (path) this.albumsTreeCache.delete(path)
         }
     }
-    public tryMarkPrefetch(): boolean
-    {
-        const now = Date.now();
-        if (now - this._lastPrefetchAt < VALIDATION_TTL_MS) return false;
-        this._lastPrefetchAt = now;
-        return true;
-    }
     public invalidateAssetList(fullpath: string)
     {
         this.assetListCache.delete(fullpath);
@@ -608,6 +603,7 @@ export class ImmichSessionCache
 
         this.assetListCache.clear();
         this.assetFileBuffers.clear();
+        this.assetFileBuffersBytes = 0;
         this.assetFileSizeCache.clear();
         this.assetInfoCache.clear();
 
@@ -617,6 +613,39 @@ export class ImmichSessionCache
         this.albumsTreeCache.clear()
 
         this.xmpCache.clear();
+    }
+
+    // Only buffer-backed nodes are ever inserted (callers gate on node.isBuffer /
+    // OPTION_MAX_CACHE_BUFFER before calling this), so every entry counts toward the
+    // byte budget below.``
+    public setAssetBuffer(id: string, node: VirtualContentBuffer): void
+    {
+        this.evictAssetBuffer(id); // re-promote existing entry to MRU if present
+
+        this.assetFileBuffers.set(id, node);
+        this.assetFileBuffersBytes += node.size;
+
+        while (this.assetFileBuffersBytes > config.OPTION_SESSION_BUFFER_CACHE_MAX_BYTES)
+        {
+            const oldest = this.assetFileBuffers.keys().next().value;
+            if (oldest === undefined || oldest === id) break; // don't evict the entry we just inserted
+            this.evictAssetBuffer(oldest);
+        }
+    }
+    private evictAssetBuffer(id: string): void
+    {
+        const buf = this.assetFileBuffers.get(id);
+        if (buf === undefined) return;
+        if (buf.isTmp) buf.removeCallback();
+        this.assetFileBuffers.delete(id);
+        this.assetFileBuffersBytes -= buf.size;
+    }
+    public tryMarkPrefetch(): boolean
+    {
+        const now = Date.now();
+        if (now - this._lastPrefetchAt < VALIDATION_TTL_MS) return false;
+        this._lastPrefetchAt = now;
+        return true;
     }
 
 }

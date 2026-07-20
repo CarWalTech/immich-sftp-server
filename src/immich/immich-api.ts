@@ -39,7 +39,12 @@ export class ImmichAPI
     private readonly baseUrl;
 
     private static readonly RECENT_UPLOAD_TTL_MS = 30 * 1000;
+
+    // Running total of bytes held in sharedBufferCache — entry count alone doesn't
+    // bound memory when entries can vary in size up to OPTION_MAX_CACHE_BUFFER each.
+    private static sharedBufferCacheBytes = 0;
     private static readonly sharedBufferCache = new Map<string, VirtualContentBuffer>();
+
     private static readonly downloadSemaphore = new DownloadSemaphore(config.OPTION_MAX_CONCURRENT_DOWNLOADS);
     private static readonly downloadsInFlight = new Map<string, { promise: Promise<VirtualContentBuffer>; ctrl: AbortController }>();
 
@@ -1149,7 +1154,7 @@ export class ImmichAPI
             const filepath = "/immich" + asset.originalPath;
             const data = await fs.promises.readFile(filepath);
             const buf = new VirtualContentBuffer(undefined, data);
-            this.cache.assetFileBuffers.set(asset.id, buf);
+            this.cache.setAssetBuffer(asset.id, buf);
             ImmichAPI.CACHE_SetShared(asset.id, buf);
             return buf;
         }
@@ -1286,7 +1291,7 @@ export class ImmichAPI
             if (node.isBuffer)
             {
                 ImmichAPI.CACHE_SetShared(asset.id, node);
-                this.cache.assetFileBuffers.set(asset.id, node);
+                this.cache.setAssetBuffer(asset.id, node);
             }
 
             resolveInflight(node);
@@ -1393,7 +1398,7 @@ export class ImmichAPI
             if (buf.length !== contentLength) return; // truncated/aborted — don't cache a partial copy
             const node = new VirtualContentBuffer(undefined, buf);
             ImmichAPI.CACHE_SetShared(assetId, node);
-            this.cache.assetFileBuffers.set(assetId, node);
+            this.cache.setAssetBuffer(assetId, node);
         });
         collector.on('error', () => { /* best-effort cache population; safe to ignore */ });
         (stream as Readable).pipe(collector);
@@ -1609,20 +1614,17 @@ export class ImmichAPI
         this.userSettings = UserConfigLoader.load_user_or_default(userId || undefined, this.currentView);
         this.cache.invalidateAll();
     }
-
     public CACHE_InvalidateTree()
     {
         this.cache.invalidateTree()
     }
-
-    // Lighter post-XMP-write invalidation: keeps the asset visible in directory
-    // listings (assetInfoCache entry preserved) but marks tags stale and evicts
-    // the rendered XMP so the next read triggers a fresh fetch.
     public CACHE_InvalidateAssetXMP(assetId: string)
     {
+        // Lighter post-XMP-write invalidation: keeps the asset visible in directory
+        // listings (assetInfoCache entry preserved) but marks tags stale and evicts
+        // the rendered XMP so the next read triggers a fresh fetch.
         this.cache.invalidateAssetXMP(assetId);
     }
-
     public CACHE_InvalidateFilepath(path: string)
     {
         this.cache.invalidateAssetList(path)
@@ -1640,21 +1642,34 @@ export class ImmichAPI
         ImmichAPI.sharedBufferCache.set(id, node);
         return node;
     }
-
     private static CACHE_SetShared(id: string, node: VirtualContentBuffer): void
     {
-        if (ImmichAPI.sharedBufferCache.has(id))
-        {
-            // Re-promote existing entry (size unchanged, just move to MRU)
-            ImmichAPI.sharedBufferCache.delete(id);
-        }
-        else if (ImmichAPI.sharedBufferCache.size >= config.OPTION_SHARED_BUFFER_CACHE_CAP)
-        {
-            // Evict LRU (first entry in Map iteration order)
-            const oldest = ImmichAPI.sharedBufferCache.keys().next().value;
-            if (oldest !== undefined) ImmichAPI.sharedBufferCache.delete(oldest);
-        }
+        // Re-promote existing entry (size unchanged, just move to MRU) — remove first
+        // so the size accounting below always reflects the post-insert state cleanly.
+        ImmichAPI.CACHE_EvictShared(id);
+
         ImmichAPI.sharedBufferCache.set(id, node);
+        ImmichAPI.sharedBufferCacheBytes += node.size;
+
+        // Evict LRU (oldest first, per Map iteration order) until BOTH the entry-count
+        // cap and the real byte budget are satisfied. Byte budget is the actual memory
+        // safety rail — entry count alone can't bound memory when sizes vary.
+        while (
+            ImmichAPI.sharedBufferCache.size > config.OPTION_SHARED_BUFFER_CACHE_CAP ||
+            ImmichAPI.sharedBufferCacheBytes > config.OPTION_SHARED_BUFFER_CACHE_MAX_BYTES
+        )
+        {
+            const oldest = ImmichAPI.sharedBufferCache.keys().next().value;
+            if (oldest === undefined || oldest === id) break; // don't evict the entry we just inserted
+            ImmichAPI.CACHE_EvictShared(oldest);
+        }
+    }
+    private static CACHE_EvictShared(id: string): void
+    {
+        const existing = ImmichAPI.sharedBufferCache.get(id);
+        if (existing === undefined) return;
+        ImmichAPI.sharedBufferCache.delete(id);
+        ImmichAPI.sharedBufferCacheBytes -= existing.size;
     }
 
     // #endregion

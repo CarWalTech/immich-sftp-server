@@ -12,6 +12,7 @@ import { VirtualContentBuffer } from '../../filesystem/virtual-content-buffer';
 import { XMPUtils } from '../../utils/xmp-utils';
 import { ImmichAPI } from '../immich-api';
 import { ImmichAlbumBase, ImmichAlbumUser, ImmichAsset, ImmichUser, isCurrentUserAlbumOwner } from "./immich-api-utils";
+import { logger } from '../../logger';
 
 // Constants
 const NOSYNC_TAG = '#nosync';
@@ -279,8 +280,9 @@ export function generateAlbumMetadataUserDocument(album: AlbumVirtualFileAlbum, 
     }, isCurrentUserAlbumOwner(album, currentUser), baseUrl);
 }
 // Tag-related sidecar fields that Immich always owns — stripped before applying Immich data.
-// Sidecar tags that are leaf-name equivalents of existing Immich tags are already covered
-// by the Immich tag values written below; no manual "resemble" matching is required.
+// dc:subject, lr:hierarchicalSubject and digiKam:TagsList are regenerated below from Immich's
+// tag list; the rest (MicrosoftPhoto/acdsee/mediapro) are dropped with no replacement since
+// nothing currently regenerates them.
 const SIDECAR_TAG_FIELDS = [
     'dc:subject', 'lr:hierarchicalSubject',
     'digiKam:TagsList',
@@ -337,6 +339,7 @@ export function generateAssetMetadataDocument(asset: ImmichAsset, existingSideca
     descNode['@_xmlns:dc'] = 'http://purl.org/dc/elements/1.1/';
     descNode['@_xmlns:xmp'] = 'http://ns.adobe.com/xap/1.0/';
     descNode['@_xmlns:lr'] = 'http://ns.adobe.com/lightroom/1.0/';
+    descNode['@_xmlns:digiKam'] = 'http://www.digikam.org/ns/1.0/';
     if (hasGPS) descNode['@_xmlns:exif'] = 'http://ns.adobe.com/exif/1.0/';
     if (hasCamera) descNode['@_xmlns:tiff'] = 'http://ns.adobe.com/tiff/1.0/';
     if (hasLocation) descNode['@_xmlns:photoshop'] = 'http://ns.adobe.com/photoshop/1.0/';
@@ -368,7 +371,11 @@ export function generateAssetMetadataDocument(asset: ImmichAsset, existingSideca
 
     // ── Apply Immich tag fields (always authoritative, even when empty) ────────
     // dc:subject: plain leaf names (DigiKam standard — no path separators).
-    // lr:hierarchicalSubject carries the full ancestor paths.
+    // lr:hierarchicalSubject carries the full ancestor paths, '|'-joined.
+    // digiKam:TagsList carries the full ancestor paths too, but '/'-joined —
+    // DigiKam's own native field; regenerated so a DigiKam read-back after a
+    // write from another client (e.g. Nextcloud Memories) still sees its
+    // preferred field populated instead of silently losing it on round-trip.
     const immichLeafTags = immichTags.filter(
         tag => !immichTags.some(other => other !== tag && other.startsWith(tag + '/'))
     );
@@ -382,6 +389,8 @@ export function generateAssetMetadataDocument(asset: ImmichAsset, existingSideca
         descNode['dc:subject'] = { 'rdf:Bag': { 'rdf:li': subjects } };
     if (hierarchical.length > 0)
         descNode['lr:hierarchicalSubject'] = { 'rdf:Bag': { 'rdf:li': hierarchical } };
+    if (immichLeafTags.length > 0)
+        descNode['digiKam:TagsList'] = { 'rdf:Bag': { 'rdf:li': immichLeafTags } };
 
     // ── Build XML ─────────────────────────────────────────────────────────────
     const doc = {
@@ -554,6 +563,10 @@ export async function _syncAssetTagsFromXmp(asset: ImmichAsset, newTagValues: st
     const toAdd = [...targetTagIds].filter(id => !currentTagIds.has(id));
     const toRemove = [...currentTagIds].filter(id => !targetTagIds.has(id));
 
+    logger.info('MetadataUtils', '_syncAssetTagsFromXmp',
+        `asset=${asset.id} xmpTagValues=${JSON.stringify(newTagValues)} currentTagIds=${JSON.stringify([...currentTagIds])} `
+        + `targetTagIds=${JSON.stringify([...targetTagIds])} toAdd=${JSON.stringify(toAdd)} toRemove=${JSON.stringify(toRemove)}`);
+
     if (toAdd.length > 0)
         await api.SERVER_AddAssetsToTags(asset.id, toAdd)
 
@@ -685,6 +698,8 @@ export async function applyEmbeddedAssetMetadataWrite(asset: ImmichAsset, origin
         mediaStreamDigest(originalVcb, ext),
         mediaStreamDigest(newVcb, ext),
     ]);
+    logger.info('MetadataUtils', 'applyEmbeddedAssetMetadataWrite', `asset=${asset.id} originalDigest=${originalDigest} newDigest=${newDigest} match=${originalDigest === newDigest}`);
+
     if (originalDigest !== newDigest) return 'content-changed';
 
     const xmp = await extractXmpFromImage(newVcb, ext);
@@ -755,6 +770,10 @@ export async function saveAssetMetadataFileContent(asset: ImmichAsset, contents:
     if (newLon !== undefined && newLon !== exif.longitude)
         patch.longitude = newLon;
 
+    logger.info('MetadataUtils', 'saveAssetMetadataFileContent',
+        `asset=${asset.id} parsed={description=${JSON.stringify(newDescription)}, rating=${newRating}, date=${newDate}, lat=${newLat}, lon=${newLon}, tags=${JSON.stringify(newTagValues)}} `
+        + `currentExif={description=${JSON.stringify(exif.description)}, rating=${(exif as any).rating}} patch=${JSON.stringify(patch)}`);
+
     if (Object.keys(patch).length > 0)
     {
         await api.SERVER_UpdateAsset(asset.id, patch)
@@ -763,12 +782,16 @@ export async function saveAssetMetadataFileContent(asset: ImmichAsset, contents:
     // --- Sync tags ---
     await _syncAssetTagsFromXmp(asset, newTagValues, api);
 
-    // --- Write XMP back to local sidecar if local-files mode is enabled ---
-    if (config.OPTION_ENABLE_LOCAL_FILES)
-    {
-        const filepath = "/immich" + asset.originalPath + ".xmp";
-        await fs.promises.writeFile(filepath, contents, 'utf8');
-    }
+    // Deliberately NOT mirroring `contents` to the physical .xmp sidecar path here.
+    // Immich's own server-side MetadataRepository job independently regenerates that
+    // exact file (from its DB, which the SERVER_UpdateAsset/tag calls above just
+    // updated) every time an asset's metadata changes -- it is already the sole
+    // authoritative writer of the on-disk sidecar. A second direct filesystem write
+    // from here races Immich's own atomic tmp-then-rename exiftool write on the same
+    // path: whichever writer loses the race either throws ("Temporary file already
+    // exists", seen repeatedly in immich_server's logs) or gets silently clobbered by
+    // the other, which is how fields set via this exact code path were observed to
+    // disappear again shortly after. Let Immich own that file; only talk to it via API.
 }
 
 

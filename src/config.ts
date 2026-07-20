@@ -39,6 +39,9 @@ export class Config
   OPTION_MAX_CACHE_BUFFER: number
   OPTION_SHARED_BUFFER_CACHE_CAP: number
   OPTION_MAX_METADATA_WRITE_SIZE: number
+  OPTION_SESSION_IDLE_TIMEOUT_SECONDS: number
+  OPTION_SHARED_BUFFER_CACHE_MAX_BYTES: number
+  OPTION_SESSION_BUFFER_CACHE_MAX_BYTES: number
 
   // server user defaults
   USERDEFAULTS_ASSET_ENABLE_SIDECAR_FILES: boolean
@@ -82,12 +85,11 @@ export class Config
     this.OPTION_MAX_CONCURRENT_DOWNLOADS = getEnvNumber('SERVER_OPTION_MAX_CONCURRENT_DOWNLOADS', 6, true);
     this.OPTION_MAX_READ_BATCH_SIZE = getEnvNumber('SERVER_OPTION_MAX_READ_BATCH_SIZE', 50);
     this.OPTION_MAX_CACHE_BUFFER = getEnvByteSize('SERVER_OPTION_MAX_CACHE_BUFFER', '4MB')
-    this.OPTION_SHARED_BUFFER_CACHE_CAP = getEnvNumber('SERVER_OPTION_SHARED_BUFFER_CACHE_CAP', 1000)
-    // Above this size, embedded-metadata writes to the asset file itself (not the .xmp
-    // sidecar) are rejected outright rather than buffered/hashed in full — that work runs
-    // synchronously and would otherwise stall the whole WebDAV event loop for the duration
-    // of every other in-flight request (uploads, deletes, folder ops) on a large video.
     this.OPTION_MAX_METADATA_WRITE_SIZE = getEnvByteSize('SERVER_OPTION_MAX_METADATA_WRITE_SIZE', '100MB')
+    this.OPTION_SHARED_BUFFER_CACHE_CAP = getEnvNumber('SERVER_OPTION_SHARED_BUFFER_CACHE_CAP', 1000)
+    this.OPTION_SHARED_BUFFER_CACHE_MAX_BYTES = getEnvByteSize('SERVER_OPTION_SHARED_BUFFER_CACHE_MAX_BYTES', '256MB')
+    this.OPTION_SESSION_IDLE_TIMEOUT_SECONDS = getEnvNumber('SERVER_OPTION_SESSION_IDLE_TIMEOUT_SECONDS', 300)
+    this.OPTION_SESSION_BUFFER_CACHE_MAX_BYTES = getEnvByteSize('SERVER_OPTION_SESSION_BUFFER_CACHE_MAX_BYTES', '256MB')
 
     // server user defaults
     this.USERDEFAULTS_ASSET_ENABLE_SIDECAR_FILES = getEnvBoolean('SERVER_USERDEFAULTS_ASSET_ENABLE_SIDECAR_FILES', true);

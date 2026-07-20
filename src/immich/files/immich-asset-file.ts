@@ -149,6 +149,8 @@ export class ImmichAssetFile extends ImmichVirtualFile
             throw err;
         }
 
+        logger.info('ImmichAssetFile', 'event_writefile', `asset=${this.asset.id} result=${result}`);
+
         switch (result)
         {
             case 'content-changed':

@@ -14,6 +14,15 @@ process.on('uncaughtException', (error) =>
     process.exit(1);
 });
 
+for (const signal of ['SIGTERM', 'SIGINT'] as const)
+{
+    process.on(signal, () =>
+    {
+        logger.error('SERVER', 'CRASH', `Received ${signal} — process is exiting.`);
+        process.exit(0);
+    });
+}
+
 async function startServers(): Promise<void>
 {
   const [{ config }, { SftpProtocolServer }, { WebdavProtocolServer }] = await Promise.all([

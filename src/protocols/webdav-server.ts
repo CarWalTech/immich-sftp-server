@@ -44,7 +44,7 @@ interface CachedUser {
   lastUsed: number;
 }
 
-const SESSION_TTL_MS = 60 * 60 * 1000;
+const SESSION_TTL_MS = config.OPTION_SESSION_IDLE_TIMEOUT_SECONDS * 1000;
 const userCache = new Map<string, CachedUser>();
 
 // In-flight deduplication: prevents concurrent requests from spawning multiple
@@ -61,7 +61,10 @@ function pruneUserCache(): void {
   }
 }
 
-setInterval(pruneUserCache, 5 * 60 * 1000).unref();
+// Check at 1/4 the configured TTL (floor 10s, cap 5min) so a short TTL isn't left
+// stale for minutes by a sweep interval sized for the old fixed 60-minute default.
+const PRUNE_CHECK_INTERVAL_MS = Math.max(10_000, Math.min(SESSION_TTL_MS / 4, 5 * 60 * 1000));
+setInterval(pruneUserCache, PRUNE_CHECK_INTERVAL_MS).unref();
 
 function cbOk<T>(callback: (err: Error, value?: T) => void, value: T): void {
   callback(undefined!, value);
