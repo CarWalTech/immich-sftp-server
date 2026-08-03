@@ -296,6 +296,70 @@ const SIDECAR_TAG_FIELDS = [
     '@_xmlns:mediapro',
 ];
 
+// Editable fields that Immich has no database home for (it neither stores nor round-trips them),
+// so a client edit to them is lost unless we persist it to the on-disk .xmp ourselves. The read
+// side (generateAssetMetadataDocument) already preserves anything it doesn't manage, so once these
+// land on disk they survive both reads and Immich's own sidecar regeneration (which merges, not
+// rewrites). `node` is the XMP element in the incoming sidecar; `tag` is the ExifTool tag we write
+// it back as; `kind` selects how the value is read out of the parsed XMP.
+type ExtraSidecarField = { node: string; tag: string; kind: 'alt' | 'simple' | 'list' };
+const EXTRA_SIDECAR_FIELDS: ExtraSidecarField[] = [
+    { node: 'dc:title', tag: 'Title', kind: 'alt' },
+    { node: 'xmp:Label', tag: 'Label', kind: 'simple' },
+];
+
+// Minimal valid XMP packet, used to seed a sidecar that doesn't exist yet before ExifTool writes
+// individual tags into it.
+const EMPTY_XMP_SKELETON =
+    `<?xpacket begin='﻿' id='W5M0MpCehiHzreSzNTczkc9d'?>\n`
+    + `<x:xmpmeta xmlns:x='adobe:ns:meta/'>\n`
+    + `<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\n`
+    + `<rdf:Description rdf:about=''/>\n`
+    + `</rdf:RDF>\n</x:xmpmeta>\n<?xpacket end='w'?>`;
+
+/**
+ * Persist client-edited fields that Immich can't store (see EXTRA_SIDECAR_FIELDS) straight to the
+ * asset's on-disk .xmp via a targeted ExifTool write — only the listed tags change, everything else
+ * (including Immich's own fields) is left intact. Best-effort: a failure here never blocks the
+ * Immich API sync. Only fields the incoming sidecar actually asserts are written; absent fields are
+ * left alone so a partial write can't wipe a value the client simply didn't include.
+ */
+async function persistExtraSidecarFieldsToDisk(asset: ImmichAsset, desc: Record<string, any>): Promise<void>
+{
+    if (!config.OPTION_ENABLE_LOCAL_FILES) return;
+
+    const originalPath = (asset as any).originalPath;
+    if (typeof originalPath !== 'string' || originalPath.length === 0) return;
+
+    const writeTags: Record<string, unknown> = {};
+    for (const f of EXTRA_SIDECAR_FIELDS)
+    {
+        if (desc[f.node] === undefined) continue; // not asserted → don't touch it
+        const value =
+            f.kind === 'alt' ? XMPUtils.extractAltText(desc, f.node)
+                : f.kind === 'list' ? XMPUtils.extractListValues(desc, f.node)[0]
+                    : XMPUtils.extractSimpleValue(desc, f.node);
+        if (value === undefined || value === '') continue; // clearing not handled in this pass
+        writeTags[f.tag] = value;
+    }
+    if (Object.keys(writeTags).length === 0) return;
+
+    const filepath = '/immich' + originalPath + '.xmp';
+    try
+    {
+        if (!fs.existsSync(filepath))
+            await fs.promises.writeFile(filepath, EMPTY_XMP_SKELETON, 'utf8');
+        await exiftool.write(filepath, writeTags, ['-overwrite_original_in_place']);
+        logger.info('MetadataUtils', 'persistExtraSidecarFieldsToDisk',
+            `asset=${asset.id} path=${filepath} wrote=${JSON.stringify(writeTags)}`);
+    }
+    catch (e)
+    {
+        logger.warn('MetadataUtils', 'persistExtraSidecarFieldsToDisk',
+            `asset=${asset.id} path=${filepath} failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+}
+
 export function generateAssetMetadataDocument(asset: ImmichAsset, existingSidecar: string | null): string
 {
     const exif = asset.exifInfo ?? {};
@@ -740,6 +804,16 @@ export async function saveAssetMetadataFileContent(asset: ImmichAsset, contents:
     // Tags: Immich priority = digiKam:TagsList > lr:hierarchicalSubject > dc:subject
     // lr:hierarchicalSubject uses '|' as separator (XMP standard) — normalize to '/'.
     // It also contains all ancestor paths; keep only leaf entries (not a prefix of any other).
+    //
+    // Distinguish "the writer did not touch tags" from "the writer cleared all tags": a client
+    // (e.g. Nextcloud Memories) legitimately writes a PARTIAL sidecar when only a scalar field
+    // changed, omitting the tag containers entirely. extractListValues() returns [] for both the
+    // absent and the present-but-empty cases, so we must inspect presence on the parsed node.
+    // getDescNode() flattens every rdf:Description block into one object, so a tag namespace is
+    // "asserted" iff its key exists there — even as an empty rdf:Bag. Only then may we reconcile
+    // (which includes removing tags); otherwise we leave Immich's existing tags untouched.
+    const tagsAsserted = ['digiKam:TagsList', 'lr:hierarchicalSubject', 'dc:subject']
+        .some(prop => desc[prop] !== undefined);
     const rawHierarchical = XMPUtils.extractListValues(desc, 'lr:hierarchicalSubject')
         .map(v => v.replace(/\|/g, '/'));
     const leafHierarchical = rawHierarchical.filter(
@@ -758,21 +832,44 @@ export async function saveAssetMetadataFileContent(asset: ImmichAsset, contents:
     if (newDescription !== undefined && newDescription !== (exif.description ?? ''))
         patch.description = newDescription;
 
-    if (newRating !== undefined && Number.isFinite(newRating) && newRating >= 0 && newRating <= 5)
-        patch.rating = Math.round(newRating);
+    // Rating: Immich accepts -1 (rejected), 1–5 (starred), or null (unrated) — it rejects 0.
+    // xmp:Rating 0 is the XMP "unrated" value, so a client clearing the rating (writing 0) must be
+    // translated to null. Only emit the clear when the asset currently has a rating, so an
+    // already-unrated asset doesn't generate a pointless PATCH that 500s or churns.
+    const currentRating = (exif as any).rating;
+    if (newRating !== undefined && Number.isFinite(newRating)) {
+        const r = Math.round(newRating);
+        if (r === 0) {
+            if (currentRating !== null && currentRating !== undefined && currentRating !== 0)
+                patch.rating = null;
+        } else if (r === -1 || (r >= 1 && r <= 5)) {
+            if (r !== currentRating)
+                patch.rating = r;
+        }
+    }
 
     if (newDate !== undefined && newDate !== (exif.dateTimeOriginal ?? asset.fileCreatedAt ?? ''))
         patch.dateTimeOriginal = newDate;
 
-    if (newLat !== undefined && newLat !== exif.latitude)
+    // GPS is round-tripped through formatGPS (deg,decimal-min at toFixed(6)) and parseGPS, so an
+    // unchanged coordinate comes back differing in the last digit. Compare with an epsilon instead
+    // of strict inequality, otherwise every save re-PATCHes lat/lon and slowly drifts the value.
+    const GPS_EPSILON = 1e-6;
+    if (newLat !== undefined && (exif.latitude === undefined || exif.latitude === null || Math.abs(newLat - exif.latitude) > GPS_EPSILON))
         patch.latitude = newLat;
 
-    if (newLon !== undefined && newLon !== exif.longitude)
+    if (newLon !== undefined && (exif.longitude === undefined || exif.longitude === null || Math.abs(newLon - exif.longitude) > GPS_EPSILON))
         patch.longitude = newLon;
 
     logger.info('MetadataUtils', 'saveAssetMetadataFileContent',
         `asset=${asset.id} parsed={description=${JSON.stringify(newDescription)}, rating=${newRating}, date=${newDate}, lat=${newLat}, lon=${newLon}, tags=${JSON.stringify(newTagValues)}} `
+        + `tagsAsserted=${tagsAsserted} `
         + `currentExif={description=${JSON.stringify(exif.description)}, rating=${(exif as any).rating}} patch=${JSON.stringify(patch)}`);
+
+    // Persist non-Immich fields (Title/Label/…) to the on-disk sidecar BEFORE the Immich PATCH:
+    // the PATCH triggers Immich's own sidecar regeneration, which merges over (preserves) whatever
+    // is already on disk — so writing first lets those fields survive that regeneration.
+    await persistExtraSidecarFieldsToDisk(asset, desc);
 
     if (Object.keys(patch).length > 0)
     {
@@ -780,7 +877,13 @@ export async function saveAssetMetadataFileContent(asset: ImmichAsset, contents:
     }
 
     // --- Sync tags ---
-    await _syncAssetTagsFromXmp(asset, newTagValues, api);
+    // Only reconcile when the sidecar actually asserts tag fields. A partial sidecar that omits
+    // the tag containers must NOT be read as "remove every tag" (that was erasing all of an
+    // asset's tags whenever a client saved an unrelated scalar change).
+    if (tagsAsserted)
+    {
+        await _syncAssetTagsFromXmp(asset, newTagValues, api);
+    }
 
     // Deliberately NOT mirroring `contents` to the physical .xmp sidecar path here.
     // Immich's own server-side MetadataRepository job independently regenerates that
