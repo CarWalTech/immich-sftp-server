@@ -52,8 +52,9 @@ export interface ImmichAsset
     ownerId: string,
     people?: any,
     resized?: boolean,
+    sidecarPath?: string,
     stack?: any,
-    tags?: any,
+    tags?: ImmichTag[],
     thumbhash?: string,
     type: string,
     unassignedFaces?: any,
@@ -257,18 +258,46 @@ export function getVirtualTagTree(tags: ImmichTag[]): ImmichTagsDirectoryNode
 
     return root;
 }
-export function getAssetMtime(asset: ImmichAsset): Timestamp
+function firstTimestamp(asset: ImmichAsset, candidates: Array<string | undefined>, context: string): Timestamp
 {
-    // Prefer Immich server-maintained timestamps first, then fall back to uploaded file timestamps.
-    const candidates = [asset.updatedAt, asset.createdAt, asset.fileModifiedAt, asset.fileCreatedAt];
     for (const value of candidates)
     {
         const timestamp = Timestamp.fromNullableString(value);
         if (timestamp) return timestamp
     }
 
-    logger.warn('ImmichAssetUtils', 'getAssetMtime', `Asset '${asset.originalFileName}' (ID: ${asset.id}) has missing/invalid timestamps, using current time fallback.`);
+    logger.warn('ImmichAssetUtils', context, `Asset '${asset.originalFileName}' (ID: ${asset.id}) has missing/invalid timestamps, using current time fallback.`);
     return Timestamp.now();
+}
+
+/**
+ * Modification time for the asset's *metadata* — the sidecar's contents really do
+ * change whenever Immich's row does, so updatedAt is the right answer here.
+ */
+export function getAssetMtime(asset: ImmichAsset): Timestamp
+{
+    // Prefer Immich server-maintained timestamps first, then fall back to uploaded file timestamps.
+    return firstTimestamp(asset, [asset.updatedAt, asset.createdAt, asset.fileModifiedAt, asset.fileCreatedAt], 'getAssetMtime');
+}
+
+/**
+ * Modification time for the asset's *bytes*.
+ *
+ * The original media is immutable once uploaded, so its mtime must be too.
+ * updatedAt is a database row timestamp that moves whenever any Immich job
+ * touches the asset (thumbnail regeneration, face detection, a tag edit), and
+ * using it here makes every sync client believe unchanged photos need
+ * re-transferring.
+ */
+export function getAssetContentMtime(asset: ImmichAsset): Timestamp
+{
+    return firstTimestamp(asset, [asset.fileModifiedAt, asset.fileCreatedAt, asset.createdAt, asset.updatedAt], 'getAssetContentMtime');
+}
+
+/** Creation time of the asset's content, for WebDAV's creationdate property. */
+export function getAssetCreationTime(asset: ImmichAsset): Timestamp
+{
+    return firstTimestamp(asset, [asset.fileCreatedAt, asset.fileModifiedAt, asset.createdAt, asset.updatedAt], 'getAssetCreationTime');
 }
 export function getAlbumsFingerprint(albums: ImmichAlbumDirectoryInfo[]): string
 {
@@ -378,6 +407,7 @@ export function mapAssetFromApi(asset: any): ImmichAsset
         ownerId: asset.ownerId,
         people: asset.people,
         resized: asset.resized,
+        sidecarPath: asset.sidecarPath,
         stack: asset.stack,
         tags: asset.tags,
         thumbhash: asset.thumbhash,

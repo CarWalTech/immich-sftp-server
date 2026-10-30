@@ -35,6 +35,12 @@ export class Timestamp
         return Math.floor(Date.now() / 1000)
     }
 
+    /** Rebuild a Timestamp from the UNIX-seconds form returned by value(). */
+    static fromSeconds(seconds: number)
+    {
+        return new Timestamp(seconds * 1000)
+    }
+
     static fromNullableString(value?: string)
     {
         const parsed = value ? Date.parse(value) : Number.NaN;

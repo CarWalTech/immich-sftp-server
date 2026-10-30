@@ -23,8 +23,8 @@ export class ImmichFileSystem implements VirtualFileSystem {
     private _statInflight: Map<string, Promise<VFSResponse<VirtualMetadata>>> = new Map();
     private _listInflight: Map<string, Promise<VirtualMetadata[]>> = new Map();
     private _statCache: Map<string, { result: VFSResponse<VirtualMetadata>, expiresAt: number }> = new Map();
-    private static readonly STAT_CACHE_TTL_MS = 500;
-    private static readonly STAT_CACHE_PRUNE_THRESHOLD = 500;
+    // Sized so a single large directory listing fits without self-eviction.
+    private static readonly STAT_CACHE_PRUNE_THRESHOLD = 20_000;
     private static readonly PHANTOM_XMP_TTL_MS = 30_000;
 
     constructor() {
@@ -59,10 +59,18 @@ export class ImmichFileSystem implements VirtualFileSystem {
             if (!node || !node.isDir()) throw new Error(`Not a directory: ${currentDir}`);
 
             logger.filesystem("ImmichFileSystem", "LIST", `Listing files: ${currentDir}`)
-            const result = await (node as VirtualDirectory).event_list()
+            const entries = await (node as VirtualDirectory).event_list_entries()
             logger.filesystem("ImmichFileSystem", "LIST", `Done listing files: ${currentDir}`)
-            if (result) return result
-            else throw new Error("Unable to process event list")
+            if (!entries) throw new Error("Unable to process event list")
+
+            // The listing already resolved every child's metadata.  Publish it into
+            // the stat cache so the burst of per-child property requests that
+            // follows a readdir (WebDAV asks for type, size, mtime, ctime, etag and
+            // mimetype separately) is answered from memory instead of re-walking
+            // the tree and re-hitting the API once per property.
+            this.seedStatCache(currentDir, entries);
+
+            return entries.map(e => e.meta);
         })().finally(() => this._listInflight.delete(currentDir));
 
         this._listInflight.set(currentDir, promise);
@@ -145,16 +153,14 @@ export class ImmichFileSystem implements VirtualFileSystem {
             return { success: true, contents: VirtualMetadata.file_rw(name, recentUpload.fileSize, Timestamp.now()) };
         }
 
+        const key = PathUtils.normalizePath(filename);
         const now = Date.now();
-        const cached = this._statCache.get(filename);
+        const cached = this._statCache.get(key);
         if (cached && now < cached.expiresAt) return cached.result;
 
-        if (this._statCache.size >= ImmichFileSystem.STAT_CACHE_PRUNE_THRESHOLD) {
-            for (const [key, entry] of this._statCache)
-                if (now >= entry.expiresAt) this._statCache.delete(key);
-        }
+        this.pruneStatCache(now);
 
-        const existing = this._statInflight.get(filename);
+        const existing = this._statInflight.get(key);
         if (existing) return existing;
 
         const promise = (async () => {
@@ -165,12 +171,47 @@ export class ImmichFileSystem implements VirtualFileSystem {
 
             const node_result = await node.event_stat();
             const result = { success: true, contents: node_result };
-            this._statCache.set(filename, { result, expiresAt: Date.now() + ImmichFileSystem.STAT_CACHE_TTL_MS });
+            this._statCache.set(key, { result, expiresAt: Date.now() + config.OPTION_STAT_CACHE_TTL_MS });
             return result;
-        })().finally(() => this._statInflight.delete(filename));
+        })().finally(() => this._statInflight.delete(key));
 
-        this._statInflight.set(filename, promise);
+        this._statInflight.set(key, promise);
         return promise;
+    }
+
+    /**
+     * Publish metadata resolved during a directory listing into the stat cache.
+     *
+     * Without this, a WebDAV PROPFIND on an N-entry directory performs roughly
+     * 6N stat() calls immediately after the readdir that already computed every
+     * one of those answers.
+     */
+    private seedStatCache(currentDir: string, entries: Array<{ node: { name: string }; meta: VirtualMetadata }>) {
+        const now = Date.now();
+        this.pruneStatCache(now);
+
+        const base = PathUtils.normalizePath(currentDir);
+        const expiresAt = now + config.OPTION_STAT_CACHE_TTL_MS;
+        for (const { node, meta } of entries) {
+            const key = base === '/' ? `/${node.name}` : `${base}/${node.name}`;
+            this._statCache.set(key, { result: { success: true, contents: meta }, expiresAt });
+        }
+    }
+
+    private pruneStatCache(now: number) {
+        if (this._statCache.size < ImmichFileSystem.STAT_CACHE_PRUNE_THRESHOLD) return;
+
+        for (const [key, entry] of this._statCache)
+            if (now >= entry.expiresAt) this._statCache.delete(key);
+
+        // Everything was still live (one big directory can do this on its own):
+        // drop oldest-inserted entries until back under the cap so the map can't
+        // grow without bound.
+        while (this._statCache.size >= ImmichFileSystem.STAT_CACHE_PRUNE_THRESHOLD) {
+            const oldest = this._statCache.keys().next().value;
+            if (oldest === undefined) break;
+            this._statCache.delete(oldest);
+        }
     }
     async rename(oldFileName: string, newFileName: string) {
         const tmp_result = await this.memory.rename(oldFileName, newFileName)
@@ -236,7 +277,7 @@ export class ImmichFileSystem implements VirtualFileSystem {
 
     public invalidatePath(path: string) {
         this.immichApi.CACHE_InvalidateFilepath(path)
-        this._statCache.delete(path);
+        this._statCache.delete(PathUtils.normalizePath(path));
     }
 
 

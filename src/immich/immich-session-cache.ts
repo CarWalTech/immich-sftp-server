@@ -7,11 +7,14 @@ import { AssetDownloadSource } from '../utils/config-utils';
 import { DateUtils } from "../utils/date-utils";
 import { ImmichAssetFileType } from "./files/immich-asset-file";
 import { ImmichAPI } from './immich-api';
-import { ImmichAlbumDirectoryInfo, ImmichAlbumsDirectoryNode, ImmichAsset, ImmichUser } from "./utils/immich-api-utils";
+import { ImmichAlbumDirectoryInfo, ImmichAlbumsDirectoryNode, ImmichAsset, ImmichTag, ImmichUser } from "./utils/immich-api-utils";
 import { buildAssetMetadataXMP } from './utils/immich-metadata-utils';
 
 const ASSET_CACHE_DIR = '/config/cache';
 const SAVE_DEBOUNCE_MS = 5_000;
+// Upper bound on how long a debounced save can keep being deferred by continuing
+// activity.
+const SAVE_MAX_DELAY_MS = 60_000;
 // How long a cache entry is trusted without re-validating against the Immich API.
 // Within this window all callers return cached data with zero network I/O.
 // After the window expires ONE request re-validates (others wait on the in-flight
@@ -109,9 +112,33 @@ export class ImmichSessionCache
     // Stores album tree data per directory/path key
     albumsTreeCache: Map<string, ImmichCachedEntry<ImmichAlbumsDirectoryNode | undefined>>;
     // Stores rendered XMP sidecar strings keyed by asset ID, valid while updatedAt matches.
-    // Capped with LRU eviction — XMP is cheap to re-generate from assetInfoCache.
+    // True LRU (re-inserted on every hit) so a large directory scan cannot evict the
+    // entries it is actively re-reading, and persisted to disk so a restart does not
+    // re-render the whole library.
     private xmpCache: Map<string, { xmp: string; updatedAt: string }> = new Map();
-    private static readonly XMP_CACHE_CAP = 2_000;
+    private static readonly XMP_CACHE_CAP = config.OPTION_XMP_CACHE_CAP;
+    private static readonly XMP_PERSIST_CAP = Math.min(config.OPTION_XMP_CACHE_CAP, 5_000);
+
+    // assetId → tags, resolved in bulk from the tag side rather than per asset.
+    // Only built when the Immich server won't return tags with search/metadata.
+    private tagIndexCache: Map<string, ImmichTag[]> | null = null;
+    private tagIndexBuiltAt = 0;
+    private inFlightTagIndexBuild: Promise<Map<string, ImmichTag[]>> | null = null;
+    private static readonly TAG_INDEX_TTL_MS = 300_000;
+
+    private tagListCache: ImmichTag[] | null = null;
+    private tagListCachedAt = 0;
+    private inFlightTagListFetch: Promise<ImmichTag[]> | null = null;
+
+    // Assets known to have no sidecar file in the mounted Immich library
+    // (local-files mode only) → epoch-ms at which to re-check.
+    private localSidecarMissing: Map<string, number> = new Map();
+    private static readonly LOCAL_SIDECAR_MISS_TTL_MS = 300_000;
+    private static readonly LOCAL_SIDECAR_MISS_CAP = 50_000;
+
+    // Assets whose tags were just mutated locally — the next sidecar read must go
+    // to the API rather than trusting the (now stale) bulk tag index.
+    private forceAssetRefetch: Set<string> = new Set();
 
     // Raw album list cache — the result of GET /api/albums, shared across all
     // connections for the same user.  All FETCH_AlbumVirtualBranch calls derive
@@ -135,6 +162,7 @@ export class ImmichSessionCache
     private _userId: string | null = null;
     private _viewId: string = "";
     private _saveTimer: ReturnType<typeof setTimeout> | null = null;
+    private _firstDirtyAt = 0;
 
     constructor()
     {
@@ -187,6 +215,7 @@ export class ImmichSessionCache
                     lists: Record<string, { data: string[]; updatedAt: string }>;
                     albumPaths: Record<string, string>;
                     fileSizes?: { preview?: Record<string, number>; original?: Record<string, number> };
+                    xmp?: Record<string, { xmp: string; updatedAt: string }>;
                 };
                 let assetCount = 0;
                 for (const [k, v] of Object.entries(envelope.assets ?? {}))
@@ -219,7 +248,20 @@ export class ImmichSessionCache
                 {
                     if (k && typeof v === 'number') this.assetFileSizeCache.set(k, v, 'original');
                 }
-                logger.info('ImmichSessionCache', 'LOAD', `Restored ${assetCount} assets, ${listCount} album lists from disk`);
+                // Rendered sidecars are validated against the asset's updatedAt on
+                // read, so restoring them is safe and saves re-rendering the whole
+                // library after a restart.
+                let xmpCount = 0;
+                for (const [k, v] of Object.entries(envelope.xmp ?? {}))
+                {
+                    if (xmpCount >= ImmichSessionCache.XMP_CACHE_CAP) break;
+                    if (k && typeof v?.xmp === 'string' && typeof v?.updatedAt === 'string')
+                    {
+                        this.xmpCache.set(k, v);
+                        xmpCount++;
+                    }
+                }
+                logger.info('ImmichSessionCache', 'LOAD', `Restored ${assetCount} assets, ${listCount} album lists, ${xmpCount} sidecars from disk`);
             }
             else
             {
@@ -265,6 +307,12 @@ export class ImmichSessionCache
                     preview: Object.fromEntries(this.assetFileSizeCache.preview),
                     original: Object.fromEntries(this.assetFileSizeCache.original),
                 },
+                // Only the most-recently-used tail is persisted.  The in-memory cap
+                // can be tens of thousands of documents; serialising all of them
+                // would turn every flush into a multi-second blocking stringify.
+                xmp: Object.fromEntries(
+                    [...this.xmpCache].slice(-ImmichSessionCache.XMP_PERSIST_CAP)
+                ),
             };
             // Use the async variant so the event loop is not blocked while writing
             // large cache files (can be several MB on a big library).
@@ -278,14 +326,30 @@ export class ImmichSessionCache
     private scheduleSave(): void
     {
         if (!this._userId) return;
-        if (this._saveTimer !== null) clearTimeout(this._saveTimer);
-        this._saveTimer = setTimeout(() =>
+
+        // Debouncing alone means a mount under sustained load never reaches a quiet
+        // 5 s window and so never persists at all — exactly the case where losing
+        // the cache to a restart hurts most.  Cap how long a pending save can be
+        // pushed back.
+        const now = Date.now();
+        if (this._firstDirtyAt === 0) this._firstDirtyAt = now;
+        if ((now - this._firstDirtyAt) >= SAVE_MAX_DELAY_MS)
         {
-            this._saveTimer = null;
-            this.save().catch(err =>
-                logger.warn('ImmichSessionCache', 'SAVE', `Async save failed: ${err}`)
-            );
-        }, SAVE_DEBOUNCE_MS);
+            this.flushSave();
+            return;
+        }
+
+        if (this._saveTimer !== null) clearTimeout(this._saveTimer);
+        this._saveTimer = setTimeout(() => this.flushSave(), SAVE_DEBOUNCE_MS);
+    }
+
+    private flushSave(): void
+    {
+        if (this._saveTimer !== null) { clearTimeout(this._saveTimer); this._saveTimer = null; }
+        this._firstDirtyAt = 0;
+        this.save().catch(err =>
+            logger.warn('ImmichSessionCache', 'SAVE', `Async save failed: ${err}`)
+        );
     }
 
     /**
@@ -318,6 +382,71 @@ export class ImmichSessionCache
         }
         return this.inFlightAlbumsListFetch;
     }
+    /**
+     * TTL-cached + deduplicated tag index.  A cold directory of N sidecars calls
+     * this N times in parallel; all of them share one build.
+     */
+    public async fetchCachedTagIndex(build: () => Promise<Map<string, ImmichTag[]>>): Promise<Map<string, ImmichTag[]>>
+    {
+        if (this.tagIndexCache !== null &&
+            (Date.now() - this.tagIndexBuiltAt) < ImmichSessionCache.TAG_INDEX_TTL_MS)
+            return this.tagIndexCache;
+
+        if (!this.inFlightTagIndexBuild)
+        {
+            this.inFlightTagIndexBuild = build()
+                .then(index =>
+                {
+                    this.tagIndexCache = index;
+                    this.tagIndexBuiltAt = Date.now();
+                    return index;
+                })
+                .finally(() => { this.inFlightTagIndexBuild = null; });
+        }
+        return this.inFlightTagIndexBuild;
+    }
+
+    /** TTL-cached GET /api/tags — the tag list changes far less often than it is read. */
+    public async fetchCachedTagList(fetchData: () => Promise<ImmichTag[]>): Promise<ImmichTag[]>
+    {
+        if (this.tagListCache !== null && (Date.now() - this.tagListCachedAt) < VALIDATION_TTL_MS)
+            return this.tagListCache;
+
+        if (!this.inFlightTagListFetch)
+        {
+            this.inFlightTagListFetch = fetchData()
+                .then(tags =>
+                {
+                    this.tagListCache = tags;
+                    this.tagListCachedAt = Date.now();
+                    return tags;
+                })
+                .finally(() => { this.inFlightTagListFetch = null; });
+        }
+        return this.inFlightTagListFetch;
+    }
+
+    public invalidateTagIndex(): void
+    {
+        this.tagIndexCache = null;
+        this.tagIndexBuiltAt = 0;
+        this.tagListCache = null;
+        this.tagListCachedAt = 0;
+    }
+
+    /**
+     * Write resolved tags back onto the cached asset so they survive into the
+     * persisted cache and are carried forward by _storeAssetsAndGetIds when the
+     * album list is next refreshed.
+     */
+    public updateAssetTags(assetId: string, tags: ImmichTag[]): void
+    {
+        const cached = this.assetInfoCache.get(assetId);
+        if (!cached) return;
+        this.assetInfoCache.set(assetId, { ...cached, data: { ...cached.data, tags } });
+        this.scheduleSave();
+    }
+
     public async fetchCachedAsset(assetId: string, { fetchMeta, fetchData }: { fetchMeta?: () => Promise<{ updatedAt?: string }>; fetchData: () => Promise<ImmichAsset> }): Promise<ImmichAsset>
     {
         const inflight = this.inFlightAssetFetches.get(assetId);
@@ -361,7 +490,16 @@ export class ImmichSessionCache
             const ids: string[] = [];
             for (const asset of assets)
             {
-                this.assetInfoCache.set(asset.id, { data: asset, updatedAt: asset.updatedAt ?? listUpdatedAt });
+                // search/metadata may omit tags.  If we already resolved them for
+                // this exact revision of the asset, carry them forward instead of
+                // dropping back to undefined — otherwise every album refresh would
+                // re-trigger tag resolution for the whole library.
+                const previous = this.assetInfoCache.get(asset.id);
+                const data = (asset.tags === undefined && previous?.data.tags !== undefined && previous.updatedAt === asset.updatedAt)
+                    ? { ...asset, tags: previous.data.tags }
+                    : asset;
+
+                this.assetInfoCache.set(asset.id, { data, updatedAt: asset.updatedAt ?? listUpdatedAt });
                 ids.push(asset.id);
             }
             this.scheduleSave();
@@ -506,58 +644,109 @@ export class ImmichSessionCache
     }
     public async fetchCachedAssetXMP(assetId: string, api: ImmichAPI)
     {
-        // Use FETCH_AssetWithTags: if the cached entry is missing tags (populated from
-        // a search result) or was invalidated by a prior XMP write, this forces a fresh
-        // GET /api/assets/{id} which always returns full tag data.
+        // Resolving tags is what makes this expensive.  In order of cost:
+        //   1. the asset already carries tags (search returned them, or a previous
+        //      hydration wrote them back) — free;
+        //   2. HYDRATE_AssetTags resolves them from the shared tag index — one
+        //      bulk build amortised across the entire library;
+        //   3. only if there is no cached asset at all do we pay for a
+        //      GET /api/assets/{id}.
         const cachedEntry = this.assetInfoCache.get(assetId);
-        const actual_asset = (cachedEntry?.data && cachedEntry.data.tags !== undefined)
-            ? cachedEntry.data
-            : await api.FETCH_AssetWithTags(assetId);
+        const needsAuthoritative = this.forceAssetRefetch.delete(assetId) || !cachedEntry?.data;
+        const actual_asset = needsAuthoritative
+            ? await api.FETCH_AssetWithTags(assetId)
+            : await api.HYDRATE_AssetTags(cachedEntry!.data);
         const updatedAt = actual_asset.updatedAt ?? '';
 
         // Return already-rendered XMP if the asset hasn't changed.
-
         const entry = this.xmpCache.get(assetId);
-        const cached_xmp = entry?.updatedAt === updatedAt ? entry.xmp : undefined;
-        if (cached_xmp !== undefined) return cached_xmp;
+        if (entry?.updatedAt === updatedAt)
+        {
+            // Promote to most-recently-used so an active scan can't evict the
+            // entries it is still working through.
+            this.xmpCache.delete(assetId);
+            this.xmpCache.set(assetId, entry);
+            return entry.xmp;
+        }
+
+        // The on-disk sidecar is merged in so XMP fields Immich doesn't model
+        // survive a round-trip.  Most assets have no sidecar on disk, so the
+        // read is skipped entirely once we've established that.
+        const existing_xmp = config.OPTION_ENABLE_LOCAL_FILES
+            ? await this.readLocalSidecar(actual_asset)
+            : null;
 
         let xmp: string;
-        try
-        {
-            if (config.OPTION_ENABLE_LOCAL_FILES)
-            {
-                const filepath = "/immich" + actual_asset.originalPath + ".xmp";
-                const xmp_data = await fs.promises.readFile(filepath, 'utf8');
-                xmp = buildAssetMetadataXMP(actual_asset, xmp_data);
-            }
-            else
-            {
-                xmp = buildAssetMetadataXMP(actual_asset, null);
-            }
-        }
-        catch
-        {
-            xmp = buildAssetMetadataXMP(actual_asset, null);
-        }
+        try { xmp = buildAssetMetadataXMP(actual_asset, existing_xmp); }
+        catch { xmp = buildAssetMetadataXMP(actual_asset, null); }
 
-        if (this.xmpCache.size >= ImmichSessionCache.XMP_CACHE_CAP)
+        while (this.xmpCache.size >= ImmichSessionCache.XMP_CACHE_CAP)
         {
             const oldest = this.xmpCache.keys().next().value;
-            if (oldest !== undefined) this.xmpCache.delete(oldest);
+            if (oldest === undefined) break;
+            this.xmpCache.delete(oldest);
         }
         this.xmpCache.set(assetId, { xmp, updatedAt });
+        this.scheduleSave();
         return xmp;
+    }
+
+    /**
+     * Read the asset's sidecar from the mounted Immich library, or null when it
+     * has none.
+     *
+     * Assets without a sidecar are the common case, and the old code discovered
+     * that by letting readFile throw ENOENT on every single render.  Remember the
+     * misses instead — a short TTL is enough, since a sidecar appearing on disk
+     * is only observable through this path after the asset's updatedAt changes
+     * anyway (which is what invalidates the rendered-XMP cache above).
+     */
+    private async readLocalSidecar(asset: ImmichAsset): Promise<string | null>
+    {
+        const missingUntil = this.localSidecarMissing.get(asset.id);
+        if (missingUntil !== undefined && Date.now() < missingUntil) return null;
+
+        const filepath = asset.sidecarPath
+            ? config.PATH_IMMICH_MOUNT + asset.sidecarPath
+            : config.PATH_IMMICH_MOUNT + asset.originalPath + ".xmp";
+
+        try
+        {
+            const contents = await fs.promises.readFile(filepath, 'utf8');
+            this.localSidecarMissing.delete(asset.id);
+            return contents;
+        }
+        catch (err)
+        {
+            if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT')
+                logger.warn('ImmichSessionCache', 'XMP', `Failed to read local sidecar ${filepath}: ${err}`);
+
+            if (this.localSidecarMissing.size >= ImmichSessionCache.LOCAL_SIDECAR_MISS_CAP)
+                this.localSidecarMissing.clear();
+            this.localSidecarMissing.set(asset.id, Date.now() + ImmichSessionCache.LOCAL_SIDECAR_MISS_TTL_MS);
+            return null;
+        }
     }
 
     // Called after an XMP sidecar write: keeps the asset in assetInfoCache (so
     // directory listings stay intact) but marks tags as stale so the next XMP read
     // forces a fresh GET /api/assets/{id} that includes the updated tags.
+    //
+    // The tag index cannot serve this: the write is what changed the tags, so a
+    // bulk index built up to TAG_INDEX_TTL_MS ago would hand back the old set.
+    // Mark the asset for an authoritative refetch and drop the index, which the
+    // write has just invalidated for every other asset sharing those tags too.
     public invalidateAssetXMP(assetId: string): void
     {
         const cached = this.assetInfoCache.get(assetId);
         if (cached)
             this.assetInfoCache.set(assetId, { ...cached, data: { ...cached.data, tags: undefined } });
+        this.forceAssetRefetch.add(assetId);
+        this.invalidateTagIndex();
         this.xmpCache.delete(assetId);
+        // A sidecar write may have just created the on-disk file we previously
+        // recorded as absent.
+        this.localSidecarMissing.delete(assetId);
     }
     public invalidateAssets(assetIds: string[])
     {
@@ -566,6 +755,8 @@ export class ImmichSessionCache
             this.assetInfoCache.delete(id);
             this.assetFileSizeCache.delete(id);
             this.xmpCache.delete(id);
+            this.forceAssetRefetch.delete(id);
+            this.localSidecarMissing.delete(id);
             this.evictAssetBuffer(id);
         }
         this.scheduleSave();
@@ -613,6 +804,9 @@ export class ImmichSessionCache
         this.albumsTreeCache.clear()
 
         this.xmpCache.clear();
+        this.forceAssetRefetch.clear();
+        this.localSidecarMissing.clear();
+        this.invalidateTagIndex();
     }
 
     // Only buffer-backed nodes are ever inserted (callers gate on node.isBuffer /

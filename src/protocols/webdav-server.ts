@@ -186,25 +186,42 @@ class NoopSerializer implements webdav.FileSystemSerializer {
 // Shared lock + property managers
 // ──────────────────────────────────────────────────────────────
 
+// One entry per distinct path ever touched.  Neither map had any eviction, and
+// NextCloud PROPPATCHes {DAV:}lastmodified after every single PUT, so on a busy
+// mount these grew without bound for the lifetime of the process.  Both hold
+// soft state — a dropped lock or dead property is recoverable, an OOM is not —
+// so they are capped with LRU eviction.
+const MANAGER_CACHE_CAP = 10_000;
+
 const lockManagers = new Map<string, webdav.LocalLockManager>();
 const propManagers = new Map<string, webdav.LocalPropertyManager>();
 
-function getLockManager(key: string): webdav.LocalLockManager {
-  let m = lockManagers.get(key);
-  if (!m) {
-    m = new webdav.LocalLockManager();
-    lockManagers.set(key, m);
+function getFromManagerCache<T>(cache: Map<string, T>, key: string, create: () => T): T {
+  const existing = cache.get(key);
+  if (existing !== undefined) {
+    // Re-insert to mark most-recently-used.
+    cache.delete(key);
+    cache.set(key, existing);
+    return existing;
   }
-  return m;
+
+  while (cache.size >= MANAGER_CACHE_CAP) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+
+  const created = create();
+  cache.set(key, created);
+  return created;
+}
+
+function getLockManager(key: string): webdav.LocalLockManager {
+  return getFromManagerCache(lockManagers, key, () => new webdav.LocalLockManager());
 }
 
 function getPropManager(key: string): webdav.LocalPropertyManager {
-  let m = propManagers.get(key);
-  if (!m) {
-    m = new webdav.LocalPropertyManager();
-    propManagers.set(key, m);
-  }
-  return m;
+  return getFromManagerCache(propManagers, key, () => new webdav.LocalPropertyManager());
 }
 
 function getBackend(ctx: webdav.IContextInfo): VirtualFileSystem | null {
@@ -306,7 +323,35 @@ class ImmichWebdavFileSystem extends webdav.FileSystem {
   }
 
   protected _creationDate(path: webdav.Path, ctx: webdav.CreationDateInfo, cb: webdav.ReturnCallback<number>): void {
-    this._lastModifiedDate(path, ctx as any, cb);
+    const backend = getBackend(ctx);
+    if (!backend) return cb(webdav.Errors.ResourceNotFound);
+
+    const p = normalizePath(path.toString());
+
+    backend.stat(p)
+      .then(stat => {
+        if (!stat || !stat.contents) return cb(webdav.Errors.ResourceNotFound);
+        // ctime falls back to mtime for nodes with no distinct creation time.
+        cb(undefined, (stat.contents.ctime ?? stat.contents.mtime) * 1000);
+      })
+      .catch(err => cb(err));
+  }
+
+  // The library's default etag is md5(lastModifiedDate), which costs a second
+  // full lastModifiedDate() round-trip per resource and cannot see a size change
+  // at an unchanged timestamp.  One stat answers both concerns.
+  protected _etag(path: webdav.Path, ctx: webdav.ETagInfo, cb: webdav.ReturnCallback<string>): void {
+    const backend = getBackend(ctx);
+    if (!backend) return cb(webdav.Errors.ResourceNotFound);
+
+    const p = normalizePath(path.toString());
+
+    backend.stat(p)
+      .then(stat => {
+        if (!stat || !stat.contents) return cb(webdav.Errors.ResourceNotFound);
+        cb(undefined, `"${stat.contents.size.toString(16)}-${stat.contents.mtime.toString(16)}"`);
+      })
+      .catch(err => cb(err));
   }
 
   // ── read stream (identical tmp semantics to SFTP) ───────────

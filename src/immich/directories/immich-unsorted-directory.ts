@@ -1,4 +1,5 @@
 
+import { config } from "../../config";
 import { VirtualContentBuffer } from "../../filesystem/virtual-content-buffer";
 import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { VirtualNode } from "../../filesystem/virtual-node";
@@ -12,7 +13,7 @@ export class ImmichRootUnsortedDirectory extends ImmichVirtualDirectory
 {
     constructor(file_system: ImmichFileSystem, root: ImmichRootDirectory)
     {
-        super(file_system, DIRNAME_UNSORTED, undefined, root, { sendFn: canSendFileTo, recieveFn: canRecieveFileFrom, refreshOnMove: true, refreshOnReadDir: true })
+        super(file_system, DIRNAME_UNSORTED, undefined, root, { sendFn: canSendFileTo, recieveFn: canRecieveFileFrom, refreshOnMove: true, refreshTtlMs: config.OPTION_DIRECTORY_CACHE_TTL_MS })
     }
     async event_rebuild(): Promise<Map<string, VirtualNode>>
     {
@@ -22,7 +23,7 @@ export class ImmichRootUnsortedDirectory extends ImmichVirtualDirectory
     }
     async event_stat(): Promise<VirtualMetadata>
     {
-        return VirtualMetadata.directory_rw(this.name, this.mtime)
+        return VirtualMetadata.directory_rw(this.name, this.latestChildMtime())
     }
     async event_mkdir(filename: string): Promise<boolean>
     {

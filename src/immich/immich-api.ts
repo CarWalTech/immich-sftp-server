@@ -14,6 +14,7 @@ import { config, UserConfig, UserConfigLoader } from "../config";
 import { VirtualContentBuffer } from "../filesystem/virtual-content-buffer";
 import { RangeReadResult, RangeSpec, StreamReadResult } from "../filesystem/virtual-file-system";
 import { logger } from '../logger';
+import { mapLimit, mapLimitSettled } from "../utils/async-utils";
 import { isObjectWithId } from "../utils/common-utils";
 import { DateUtils } from '../utils/date-utils';
 import { PathUtils } from "../utils/path-utils";
@@ -46,6 +47,9 @@ export class ImmichAPI
     private static readonly sharedBufferCache = new Map<string, VirtualContentBuffer>();
 
     private static readonly downloadSemaphore = new DownloadSemaphore(config.OPTION_MAX_CONCURRENT_DOWNLOADS);
+    // Bounds every JSON API call (see callApi).  Acquired after downloadSemaphore
+    // on the paths that hold both, so the ordering can't deadlock.
+    private static readonly apiSemaphore = new DownloadSemaphore(config.OPTION_MAX_CONCURRENT_API_CALLS);
     private static readonly downloadsInFlight = new Map<string, { promise: Promise<VirtualContentBuffer>; ctrl: AbortController }>();
 
     // Per-user (per-instance) registry of in-flight metadata searches.
@@ -54,6 +58,20 @@ export class ImmichAPI
     private static searchSeq = 0;
     private readonly searchRegistry = new Map<number, { ctrl: AbortController; priority: 'high' | 'low' }>();
     private static readonly MAX_CONCURRENT_SEARCHES = 2;
+
+    // Whether POST /search/metadata honours `withTags`.  null = not yet probed.
+    // Probed once per process on the first search (see runMetadataQueries) and
+    // determines whether asset tags arrive with the listing or have to be
+    // resolved through the tag index (FETCH_TagAssetIndex).
+    private static searchSupportsTags: boolean | null = null;
+    private static readonly TAG_INDEX_CONCURRENCY = 4;
+
+    // Which album objects have had their detail fields applied, and at what
+    // updatedAt.  Keyed on identity rather than id: applyAlbumDetails mutates the
+    // object in place, and the album-tree cache hands out fresh objects on every
+    // rebuild — an id-keyed check would skip those and leave them without a
+    // description or shared-user list.
+    private readonly albumDetailsApplied = new WeakMap<ImmichAlbumDirectoryInfo, string>();
 
     constructor(immich_url: string)
     {
@@ -224,7 +242,18 @@ export class ImmichAPI
     // #endregion
 
     // #region Api Function
-    private async callApi({ method, endpoint, data, logAction, respAsStream = false, skipResponseLog = false, signal }: { method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', endpoint: string, data?: any, logAction: string, respAsStream?: boolean, skipResponseLog?: boolean, signal?: AbortSignal }): Promise<any>
+    private async callApi(args: { method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', endpoint: string, data?: any, logAction: string, respAsStream?: boolean, skipResponseLog?: boolean, signal?: AbortSignal, priority?: 'high' | 'low' }): Promise<any>
+    {
+        // Global backpressure.  Only downloads and metadata searches were bounded
+        // before, so a directory listing could open one request per asset at once
+        // and provoke the 429s that the retry loop below then backs off from.
+        // Held across retries so a backing-off request doesn't lose its slot.
+        await ImmichAPI.apiSemaphore.acquire(args.priority ?? 'high');
+        try { return await this.callApiUnthrottled(args); }
+        finally { ImmichAPI.apiSemaphore.release(); }
+    }
+
+    private async callApiUnthrottled({ method, endpoint, data, logAction, respAsStream = false, skipResponseLog = false, signal }: { method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', endpoint: string, data?: any, logAction: string, respAsStream?: boolean, skipResponseLog?: boolean, signal?: AbortSignal }): Promise<any>
     {
         const isDownload = method === 'GET' && endpoint.startsWith('assets/') && (endpoint.endsWith('/original') || endpoint.endsWith('/thumbnail'));
 
@@ -510,6 +539,7 @@ export class ImmichAPI
                                 endpoint: `albums/${album.id}`,
                                 logAction: 'Prefetch album assets',
                                 skipResponseLog: true,
+                                priority: 'low',
                             });
                             applyAlbumDetails(album, response);
                             return await this.FETCH_AssetsByMetadataBackground(
@@ -577,6 +607,27 @@ export class ImmichAPI
             },
             buildFiles: (assets, settings) => mapFilesFromAssets(assets, parent, reserved_names, settings.assetSidecarsEnabled)
         }, this.userSettings);
+    }
+    /**
+     * Populate an album's description / owner / shared-user list.
+     *
+     * The album-link and album-metadata virtual files used to reach this through
+     * FETCH_AssetsForAlbum, which enumerates every asset in the album — three
+     * requests and a full paginated listing — only to throw the assets away and
+     * keep the side effect.
+     */
+    public async FETCH_AlbumDetails(album: ImmichAlbumDirectoryInfo): Promise<void>
+    {
+        if (this.albumDetailsApplied.get(album) === (album.updatedAt ?? '')) return;
+
+        const response = await this.callApi({
+            method: 'GET',
+            endpoint: `albums/${album.id}`,
+            logAction: 'Album details',
+            skipResponseLog: true,
+        });
+        applyAlbumDetails(album, response);
+        this.albumDetailsApplied.set(album, album.updatedAt ?? '');
     }
     public async FETCH_AssetsForAlbum(album: ImmichAlbumDirectoryInfo, parent: ImmichVirtualDirectory, reserved_names?: Set<string>): Promise<ImmichAssetFileType[]>
     {
@@ -712,7 +763,13 @@ export class ImmichAPI
             let page = 1;
             while (true)
             {
-                const response = await this.callApi({
+                // Ask for tags when the server supports it.  Without them every
+                // sidecar stat falls back to a per-asset GET /api/assets/{id}
+                // (see fetchCachedAssetXMP), which is the single worst amplifier
+                // in the whole listing path.  `null` means "not probed yet".
+                const requestTags = ImmichAPI.searchSupportsTags !== false;
+
+                const search = async (withTags: boolean) => this.callApi({
                     method: 'POST',
                     endpoint: 'search/metadata',
                     data: JSON.stringify({
@@ -722,14 +779,43 @@ export class ImmichAPI
                         withDeleted: false,
                         withExif: true,
                         withStacked: true,
-                        withPeople: true
+                        withPeople: true,
+                        ...(withTags ? { withTags: true } : {})
                     }),
                     logAction: 'Search assets',
                     skipResponseLog: true,
                     signal,
                 });
 
+                let response: any;
+                try
+                {
+                    response = await search(requestTags);
+                }
+                catch (err)
+                {
+                    // Immich validates request bodies with a whitelist, so an
+                    // unsupported `withTags` is rejected outright rather than
+                    // ignored.  Probe by doing exactly that once, then remember.
+                    const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+                    if (requestTags && ImmichAPI.searchSupportsTags === null && (status === 400 || status === 422))
+                    {
+                        ImmichAPI.searchSupportsTags = false;
+                        logger.info('ImmichAPI', 'Search', 'Server rejected withTags on search/metadata — falling back to the tag index for sidecar metadata');
+                        response = await search(false);
+                    }
+                    else throw err;
+                }
+
                 const items = Array.isArray(response?.assets?.items) ? response.assets.items : [];
+
+                // The request was accepted — confirm the field actually came back
+                // before trusting it (an older server may silently ignore it).
+                if (requestTags && ImmichAPI.searchSupportsTags === null && items.length > 0)
+                {
+                    ImmichAPI.searchSupportsTags = Array.isArray(items[0]?.tags);
+                    logger.info('ImmichAPI', 'Search', `search/metadata ${ImmichAPI.searchSupportsTags ? 'returns' : 'does not return'} asset tags`);
+                }
 
                 for (const item of items)
                 {
@@ -772,22 +858,124 @@ export class ImmichAPI
     }
     public async FETCH_Tags(): Promise<ImmichTag[]>
     {
-        const response = await this.callApi({
-            method: 'GET',
-            endpoint: 'tags',
-            logAction: 'All tags',
-            skipResponseLog: true,
-        });
-
-        if (!Array.isArray(response)) return [];
-
-        const tags: ImmichTag[] = [];
-        for (const tag of response)
+        // TTL-cached: previously every sidecar write issued its own GET /api/tags.
+        // SERVER_CreateTag invalidates it, so a freshly created tag is visible to
+        // the write that created it.
+        return this.cache.fetchCachedTagList(async () =>
         {
-            if (!tag?.id || typeof tag?.id !== 'string') continue;
-            tags.push(mapTagFromApi(tag));
+            const response = await this.callApi({
+                method: 'GET',
+                endpoint: 'tags',
+                logAction: 'All tags',
+                skipResponseLog: true,
+            });
+
+            if (!Array.isArray(response)) return [];
+
+            const tags: ImmichTag[] = [];
+            for (const tag of response)
+            {
+                if (!tag?.id || typeof tag?.id !== 'string') continue;
+                tags.push(mapTagFromApi(tag));
+            }
+            return tags;
+        });
+    }
+
+    /**
+     * assetId → tags, built by asking which assets carry each tag rather than
+     * asking each asset which tags it carries.
+     *
+     * Used only when the server won't return tags with search/metadata.  Cost is
+     * O(tags) requests once per TAG_INDEX_TTL_MS, versus O(assets) requests on
+     * every cold directory listing — tag counts are typically two or three
+     * orders of magnitude below asset counts.
+     */
+    public async FETCH_TagAssetIndex(): Promise<Map<string, ImmichTag[]>>
+    {
+        return this.cache.fetchCachedTagIndex(async () =>
+        {
+            const tags = await this.FETCH_Tags();
+            const index = new Map<string, ImmichTag[]>();
+            if (tags.length === 0) return index;
+
+            const collectIds = async (tag: ImmichTag): Promise<void> =>
+            {
+                for (const visibility of ['timeline', 'archive'] as const)
+                {
+                    let page = 1;
+                    while (true)
+                    {
+                        const response = await this.callApi({
+                            method: 'POST',
+                            endpoint: 'search/metadata',
+                            data: JSON.stringify({
+                                tagIds: [tag.id],
+                                visibility,
+                                page,
+                                size: 1000,
+                                withDeleted: false,
+                            }),
+                            logAction: 'Tag index',
+                            skipResponseLog: true,
+                            // Background work: yields API slots to navigation.
+                            priority: 'low',
+                        });
+
+                        const items = Array.isArray(response?.assets?.items) ? response.assets.items : [];
+                        for (const item of items)
+                        {
+                            if (!item?.id || typeof item.id !== 'string') continue;
+                            const existing = index.get(item.id);
+                            if (existing) existing.push(tag);
+                            else index.set(item.id, [tag]);
+                        }
+
+                        const nextPageRaw = response?.assets?.nextPage;
+                        const nextPage = typeof nextPageRaw === 'string' ? Number.parseInt(nextPageRaw, 10) : Number.NaN;
+                        if (!Number.isInteger(nextPage) || nextPage <= page || items.length === 0) break;
+                        page = nextPage;
+                    }
+                }
+            };
+
+            const outcomes = await mapLimitSettled(tags, ImmichAPI.TAG_INDEX_CONCURRENCY, collectIds);
+            const failed = outcomes.filter(o => o.status === 'rejected').length;
+            if (failed > 0)
+                logger.warn('ImmichAPI', 'Tag index', `${failed}/${tags.length} tag queries failed — sidecar tags may be incomplete until the next rebuild`);
+
+            logger.info('ImmichAPI', 'Tag index', `Indexed ${tags.length} tags across ${index.size} assets`);
+            return index;
+        });
+    }
+
+    /**
+     * Ensure `asset.tags` is populated without a per-asset round-trip.
+     *
+     * Resolves through the tag index and writes the result back into the session
+     * cache, so a later listing that re-stores this asset from a search payload
+     * can carry the tags forward.  `[]` is a meaningful answer ("no tags") and is
+     * what stops fetchCachedAssetXMP from falling into the per-asset fetch.
+     * Falls back to the authoritative single-asset GET only if the index is
+     * unusable, so behaviour degrades to the previous implementation rather than
+     * silently dropping tags.
+     */
+    public async HYDRATE_AssetTags(asset: ImmichAsset): Promise<ImmichAsset>
+    {
+        if (asset.tags !== undefined) return asset;
+
+        try
+        {
+            const index = await this.FETCH_TagAssetIndex();
+            const tags = index.get(asset.id) ?? [];
+            this.cache.updateAssetTags(asset.id, tags);
+            return { ...asset, tags };
         }
-        return tags;
+        catch (err)
+        {
+            logger.warn('ImmichAPI', 'Tag index', `Tag index unavailable (${err}) — falling back to a per-asset fetch for ${asset.id}`);
+            return this.FETCH_AssetWithTags(asset.id);
+        }
     }
 
     // #endregion
@@ -1076,11 +1264,20 @@ export class ImmichAPI
 
         if (config.OPTION_ENABLE_LOCAL_FILES)
         {
-            const filepath = "/immich" + asset.originalPath;
-            const stats = fs.statSync(filepath)
-            const size = stats.size
-            this.cache.assetFileSizeCache.set(asset.id, size, 'original');
-            return size;
+            // Async stat: this runs once per asset across a whole directory listing,
+            // and statSync would serialise all of them on the event loop.
+            const filepath = config.PATH_IMMICH_MOUNT + asset.originalPath;
+            try
+            {
+                const stats = await fs.promises.stat(filepath);
+                this.cache.assetFileSizeCache.set(asset.id, stats.size, 'original');
+                return stats.size;
+            }
+            catch (err)
+            {
+                logger.warn('ImmichAPI', 'Get Download Info', `Local stat failed for ${filepath}: ${err}`);
+                return 0;
+            }
         }
 
         let response = await this.callApi({
@@ -1147,11 +1344,20 @@ export class ImmichAPI
         const localCached = this.cache.assetFileBuffers.get(asset.id);
         if (localCached) return localCached;
 
-        // 2. Local file mode — async read to avoid blocking the event loop.
-        //    Buffer is cached so subsequent accesses (multiple connections, re-reads) are instant.
+        // 2. Local file mode — the bytes are already on a local disk, so the only
+        //    question is whether it is worth holding a copy in RAM.
         if (config.OPTION_ENABLE_LOCAL_FILES)
         {
-            const filepath = "/immich" + asset.originalPath;
+            const filepath = config.PATH_IMMICH_MOUNT + asset.originalPath;
+            const stats = await fs.promises.stat(filepath);
+
+            // Above the cache budget, hand back a path-backed node: reads are served
+            // straight off the mounted library through a lazily-opened fd.  Slurping
+            // a multi-GB video into the heap here would bypass the tmp-file spill
+            // that the HTTP path uses for exactly this reason.
+            if (stats.size > config.OPTION_MAX_CACHE_BUFFER)
+                return new VirtualContentBuffer(undefined, undefined, filepath);
+
             const data = await fs.promises.readFile(filepath);
             const buf = new VirtualContentBuffer(undefined, data);
             this.cache.setAssetBuffer(asset.id, buf);
@@ -1326,7 +1532,7 @@ export class ImmichAPI
 
         if (config.OPTION_ENABLE_LOCAL_FILES)
         {
-            const filepath = "/immich" + asset.originalPath;
+            const filepath = config.PATH_IMMICH_MOUNT + asset.originalPath;
             const total = (await fs.promises.stat(filepath)).size;
             const stream = fs.createReadStream(filepath, signal ? { signal } : undefined);
             this.maybeCacheSmallStream(asset.id, stream, total);
@@ -1438,7 +1644,7 @@ export class ImmichAPI
         // 2. Local file mode — direct disk range read, no Immich round trip at all.
         if (config.OPTION_ENABLE_LOCAL_FILES)
         {
-            const filepath = "/immich" + asset.originalPath;
+            const filepath = config.PATH_IMMICH_MOUNT + asset.originalPath;
             const total = (await fs.promises.stat(filepath)).size;
             const { start, end } = resolveAgainst(total);
             return { stream: fs.createReadStream(filepath, { start, end }), start, end, total };
@@ -1575,15 +1781,16 @@ export class ImmichAPI
     }
     async SERVER_RemoveAssetsFromTags(assetId: string, toRemove: string[])
     {
-        for (const tagId of toRemove)
-        {
-            await this.callApi({
+        // Immich has no bulk "remove asset from N tags" endpoint (unlike the add
+        // side), so this stays one request per tag — but they no longer run
+        // strictly back-to-back.  The API semaphore bounds the fan-out.
+        await mapLimit(toRemove, ImmichAPI.TAG_INDEX_CONCURRENCY, async tagId =>
+            this.callApi({
                 method: 'DELETE',
                 endpoint: `tags/${tagId}/assets`,
                 data: JSON.stringify({ ids: [assetId] }),
                 logAction: 'Remove tags from asset via XMP sync',
-            });
-        }
+            }));
     }
     async SERVER_AddAssetsToTags(assetId: string, toAdd: string[])
     {
@@ -1596,12 +1803,15 @@ export class ImmichAPI
     }
     async SERVER_CreateTag(tagName: string)
     {
-        return await this.callApi({
+        const result = await this.callApi({
             method: 'POST',
             endpoint: 'tags',
             data: JSON.stringify({ name: tagName }),
             logAction: 'Create tag',
         });
+        // The cached tag list and the assetId→tags index no longer describe reality.
+        this.cache.invalidateTagIndex();
+        return result;
     }
 
     // #endregion

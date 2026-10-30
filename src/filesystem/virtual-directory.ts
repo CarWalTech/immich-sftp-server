@@ -1,10 +1,29 @@
+import { config } from "../config";
 import { logger } from "../logger";
+import { mapLimit } from "../utils/async-utils";
 import { Timestamp } from "../utils/date-utils";
 import { VirtualContentBuffer } from "./virtual-content-buffer";
 import { VirtualMetadata } from './virtual-metadata';
 import { VirtualNode } from "./virtual-node";
 export type VirtualDirectoryMoveItemFn = (item: VirtualNode, container: VirtualDirectory) => boolean;
-export type VirtualDirectoryOptions = { sendFn?: VirtualDirectoryMoveItemFn, recieveFn?: VirtualDirectoryMoveItemFn, refreshOnMove?: boolean, refreshOnReadDir?: boolean }
+export type VirtualDirectoryOptions = {
+    sendFn?: VirtualDirectoryMoveItemFn,
+    recieveFn?: VirtualDirectoryMoveItemFn,
+    refreshOnMove?: boolean,
+    /**
+     * Rebuild the child node graph on every readdir.  Correct but very expensive:
+     * a listing of an album with sidecars re-allocates two nodes per asset even
+     * when every backing API response came from cache.  Prefer `refreshTtlMs`,
+     * which bounds staleness in time instead of rebuilding unconditionally.
+     */
+    refreshOnReadDir?: boolean,
+    /**
+     * Reuse the built node graph for this long before rebuilding.  Explicit
+     * refresh() after a write/move/delete bypasses it, so this only governs how
+     * quickly changes made *outside* the bridge become visible.
+     */
+    refreshTtlMs?: number
+}
 
 export class VirtualDirectory extends VirtualNode
 {
@@ -14,6 +33,8 @@ export class VirtualDirectory extends VirtualNode
     private _sendFunction?: VirtualDirectoryMoveItemFn
     private _refreshOnMoveNode: boolean = false
     private _refreshOnReadDir: boolean = false
+    private _refreshTtlMs: number = 0
+    private _builtAt: number = 0
     private _rebuildPromise: Promise<Map<string, VirtualNode>> | null = null;
 
     constructor(name: string, mtime: Timestamp = Timestamp.now(), parent: VirtualNode | null = null, options?: VirtualDirectoryOptions)
@@ -25,7 +46,35 @@ export class VirtualDirectory extends VirtualNode
             if (options.sendFn) this._sendFunction = options.sendFn
             if (options.refreshOnMove) this._refreshOnMoveNode = options.refreshOnMove
             if (options.refreshOnReadDir) this._refreshOnReadDir = options.refreshOnReadDir
+            if (options.refreshTtlMs !== undefined) this._refreshTtlMs = options.refreshTtlMs
         }
+    }
+
+    /**
+     * Newest mtime among the children built so far, or this node's own mtime if
+     * the directory hasn't been listed yet.
+     *
+     * Directories have no timestamp of their own in Immich, and defaulting to
+     * "now" makes every listing look freshly modified — which pushes sync clients
+     * into rescanning content that hasn't changed.  Deriving from the children
+     * gives a value that is both stable and actually meaningful.
+     */
+    protected latestChildMtime(): Timestamp
+    {
+        if (this._child_nodes === null || this._child_nodes.size === 0) return this.mtime;
+
+        let latest = 0;
+        for (const child of this._child_nodes.values())
+            if (child.mtime.value() > latest) latest = child.mtime.value();
+
+        return latest > 0 ? Timestamp.fromSeconds(latest) : this.mtime;
+    }
+
+    /** True when the built node graph has outlived its refresh TTL. */
+    private isStale(): boolean
+    {
+        if (this._refreshTtlMs <= 0) return false;
+        return (Date.now() - this._builtAt) >= this._refreshTtlMs;
     }
 
     get fullpath(): string
@@ -50,7 +99,7 @@ export class VirtualDirectory extends VirtualNode
      */
     tryNodeFromCache(name: string): { hit: false } | { hit: true; node: VirtualNode | undefined }
     {
-        if (this._child_nodes === null || this._force_child_node_refresh || this.needsRefresh())
+        if (this._child_nodes === null || this._force_child_node_refresh || this.needsRefresh() || this.isStale())
             return { hit: false };
         return { hit: true, node: this._child_nodes.get(name) };
     }
@@ -62,7 +111,7 @@ export class VirtualDirectory extends VirtualNode
 
     async nodes_map(refresh?: boolean): Promise<Map<string, VirtualNode>>
     {
-        if (this._child_nodes !== null && !this._force_child_node_refresh && !this.needsRefresh() && !refresh)
+        if (this._child_nodes !== null && !this._force_child_node_refresh && !this.needsRefresh() && !this.isStale() && !refresh)
             return this._child_nodes;
 
         if (!this._rebuildPromise)
@@ -71,8 +120,16 @@ export class VirtualDirectory extends VirtualNode
             {
                 this._child_nodes = result;
                 this._force_child_node_refresh = false;
+                this._builtAt = Date.now();
                 this._rebuildPromise = null;
                 return result;
+            }).catch(err =>
+            {
+                // Leave the previous graph in place and let the next call retry —
+                // otherwise a transient API failure would wedge the directory
+                // behind a permanently-rejected promise.
+                this._rebuildPromise = null;
+                throw err;
             });
         }
 
@@ -88,21 +145,33 @@ export class VirtualDirectory extends VirtualNode
     async event_delete(): Promise<boolean>
     {
         const nodes = await this.nodes();
-        if (nodes.length == 0) return true
-        else
-        {
-            nodes.forEach(async element =>
-            {
-                let is_removed = await element.event_delete(true)
-                if (!is_removed) return false;
-            });
-            return true
-        }
+        if (nodes.length == 0) return true;
+
+        // Every child must actually finish deleting before this resolves — the
+        // previous forEach(async …) returned true immediately and dropped both the
+        // results and any rejections on the floor.
+        const results = await mapLimit(nodes, config.OPTION_MAX_CONCURRENT_STATS, n => n.event_delete(true));
+        return results.every(Boolean);
+    }
+    /**
+     * Children paired with their metadata.
+     *
+     * The pairing is what makes this worth having: a protocol layer can use it to
+     * pre-populate a path-keyed stat cache, so the per-child property requests
+     * that follow a readdir (WebDAV alone asks for type, size, mtime, ctime, etag
+     * and mimetype) are answered from memory instead of re-walking the tree.
+     */
+    async event_list_entries(): Promise<Array<{ node: VirtualNode; meta: VirtualMetadata }>>
+    {
+        const nodes = await this.nodes(this._refreshOnReadDir);
+        // Bounded: a large album would otherwise open one stat per asset at once,
+        // and a sidecar stat can reach the network or the disk.
+        const metas = await mapLimit(nodes, config.OPTION_MAX_CONCURRENT_STATS, n => n.event_stat());
+        return nodes.map((node, i) => ({ node, meta: metas[i] }));
     }
     async event_list(): Promise<VirtualMetadata[]>
     {
-        const nodes = await this.nodes(this._refreshOnReadDir);
-        return Promise.all(nodes.map(n => n.event_stat()));
+        return (await this.event_list_entries()).map(e => e.meta);
     }
     async event_readfile(): Promise<VirtualContentBuffer>
     {

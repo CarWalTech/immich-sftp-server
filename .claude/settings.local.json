@@ -16,7 +16,11 @@
       "Bash(file /omv/apps-compose/immich-file-bridge/repo/.git && ls /omv/apps-compose/immich-file-bridge/ && git config --global --list | grep -E \"safe|path\")",
       "Read(//omv/apps-compose/immich-file-bridge/**)",
       "Bash(find /omv/apps-compose/immich-file-bridge -name \"*.json\" -path \"*/.vscode/*\" 2>/dev/null && find /home/ec2-user -name \"settings.json\" -path \"*vscode*\" 2>/dev/null | head -5)",
-      "Read(//home/ec2-user/**)"
+      "Read(//home/ec2-user/**)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(node -e \"console.log\\(require\\('/omv/apps-compose/immich-file-bridge/repo/node_modules/mime-types/package.json'\\).version\\)\")",
+      "Bash(perl -pi -e \"s{'./dist/}{'/omv/apps-compose/immich-file-bridge/repo/dist/}g\" /tmp/claude-1000/-omv-apps-compose-immich-file-bridge-repo/9d5f8522-d292-43a1-97f7-353066d05549/scratchpad/verify.js)",
+      "Bash(node /tmp/claude-1000/-omv-apps-compose-immich-file-bridge-repo/9d5f8522-d292-43a1-97f7-353066d05549/scratchpad/verify.js)"
     ]
   },
   "showThinkingSummaries": true

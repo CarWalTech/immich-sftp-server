@@ -20,12 +20,16 @@ export class XMPUtils
         processEntities: true,
     };
 
+    // XMLParser is stateless across parse() calls, so one instance serves the whole
+    // process.  Constructing one per sidecar showed up as real cost when rendering
+    // a few thousand of them for a single directory listing.
+    private static readonly PARSER = new XMLParser(XMPUtils.PARSER_OPTIONS);
+
     static parseSidecar(xmp: string): Record<string, any>
     {
         try
         {
-            const parser = new XMLParser(this.PARSER_OPTIONS);
-            return parser.parse(xmp);
+            return this.PARSER.parse(xmp);
         }
         catch { return {}; }
     }
@@ -125,20 +129,29 @@ export class XMPUtils
         // Normalize any | separators to / for internal processing
         const normalized = tags.map(t => t.replace(/\|/g, '/'));
 
-        // Discard ancestor paths that Immich stored as separate tags — keep only leaves
-        const leaves = normalized.filter(
-            tag => !normalized.some(other => other !== tag && other.startsWith(tag + '/'))
-        );
+        // Discard ancestor paths that Immich stored as separate tags — keep only
+        // leaves.  A tag is an ancestor iff some other tag's own prefix chain
+        // contains it, which is a set lookup rather than a scan of every pair.
+        const ancestors = new Set<string>();
+        for (const tag of normalized)
+        {
+            const parts = tag.split('/');
+            for (let i = 1; i < parts.length; i++) ancestors.add(parts.slice(0, i).join('/'));
+        }
+        const leaves = normalized.filter(tag => !ancestors.has(tag));
 
         // Expand each leaf to all ancestor paths; use | as separator (lr:hierarchicalSubject standard)
         const result: string[] = [];
+        const seen = new Set<string>();
         for (const leaf of leaves)
         {
             const parts = leaf.split('/');
             for (let i = 1; i <= parts.length; i++)
             {
                 const segment = parts.slice(0, i).join('|');
-                if (!result.includes(segment)) result.push(segment);
+                if (seen.has(segment)) continue;
+                seen.add(segment);
+                result.push(segment);
             }
         }
         return result;

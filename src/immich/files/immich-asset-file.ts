@@ -7,7 +7,7 @@ import { VirtualMetadata } from '../../filesystem/virtual-metadata';
 import { logger } from "../../logger";
 import { ImmichFileSystem } from "../immich-file-system";
 import { ImmichVirtualFile } from "../immich-virtual-file";
-import { getAssetMtime, ImmichAsset } from "../utils/immich-api-utils";
+import { getAssetContentMtime, getAssetCreationTime, getAssetMtime, ImmichAsset } from "../utils/immich-api-utils";
 import { deleteAssetFromContainer } from "../utils/immich-fs-utils";
 import { applyEmbeddedAssetMetadataWrite, EmbeddedMetadataWriteResult, embedXmpIntoImage, saveAssetMetadataFileContent } from "../utils/immich-metadata-utils";
 
@@ -18,7 +18,7 @@ export class ImmichAssetFile extends ImmichVirtualFile
 
     constructor(asset: ImmichAsset, fsName: string, parent: VirtualDirectory, file_system: ImmichFileSystem)
     {
-        super(file_system, fsName, getAssetMtime(asset), parent)
+        super(file_system, fsName, getAssetContentMtime(asset), parent)
         this.parent_directory = parent
         this.asset = asset
     }
@@ -62,10 +62,11 @@ export class ImmichAssetFile extends ImmichVirtualFile
 
         // Content bytes are always immutable; only the mode bits move when in-place
         // metadata edits are allowed, so clients don't refuse to open the file for saving.
+        const mtime = getAssetContentMtime(this.asset);
         const meta = settings.assetAllowFileMetadataWrites
-            ? VirtualMetadata.file_rw(this.name, size, getAssetMtime(this.asset))
-            : VirtualMetadata.file_ro(this.name, size, getAssetMtime(this.asset));
-        return meta;
+            ? VirtualMetadata.file_rw(this.name, size, mtime)
+            : VirtualMetadata.file_ro(this.name, size, mtime);
+        return meta.withCreationTime(getAssetCreationTime(this.asset));
     }
 
     async event_readfile_range(range: RangeSpec, signal?: AbortSignal): Promise<RangeReadResult | null>

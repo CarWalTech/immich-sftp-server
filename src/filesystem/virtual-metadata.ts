@@ -22,6 +22,13 @@ export class VirtualMetadata
     /** Last access time (UNIX seconds) */
     public atime: number;
 
+    /**
+     * Creation time (UNIX seconds), when the node has one distinct from mtime.
+     * Surfaced as the WebDAV `creationdate` property; SFTP has no equivalent
+     * field, so it is carried but not converted.
+     */
+    public ctime?: number;
+
     /** POSIX mode bits (040755 for dirs, 100644 for files) */
     public mode: number;
 
@@ -39,7 +46,8 @@ export class VirtualMetadata
         mode: number,
         uid: number = 0,
         gid: number = 0,
-        atime: number = mtime
+        atime: number = mtime,
+        ctime?: number
     )
     {
         this.name = name;
@@ -50,6 +58,14 @@ export class VirtualMetadata
         this.mode = mode;
         this.uid = uid;
         this.gid = gid;
+        this.ctime = ctime;
+    }
+
+    /** Fluent setter — creation time is only meaningful for a few node types. */
+    public withCreationTime(ctime?: Timestamp): VirtualMetadata
+    {
+        if (ctime) this.ctime = ctime.value();
+        return this;
     }
 
 

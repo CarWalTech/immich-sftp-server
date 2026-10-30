@@ -21,6 +21,11 @@ export class ImmichRootDirectory extends VirtualDirectory
     private dir_albums: ImmichAlbumsDirectory;
     private dir_unsorted: ImmichRootUnsortedDirectory;
     private file_metadata: ImmichRootMetadataFile;
+    // Built on first use and then reused.  Re-creating them per rebuild reset
+    // their mtime to "now" every time the root was listed, which reads to a sync
+    // client as the trash folder having just changed.
+    private dir_trash?: ImmichRootTrashDirectory;
+    private dir_digikam_trash?: ImmichDigikamTrashDirectory;
 
     constructor(file_system: ImmichFileSystem)
     {
@@ -66,13 +71,13 @@ export class ImmichRootDirectory extends VirtualDirectory
 
         if (this.file_system.getUserSettings().digikamTrashCompat)
         {
-            var dir_digitrash = new ImmichDigikamTrashDirectory(this.file_system, this);
-            result.set(dir_digitrash.name, dir_digitrash as VirtualNode)
+            if (!this.dir_digikam_trash) this.dir_digikam_trash = new ImmichDigikamTrashDirectory(this.file_system, this);
+            result.set(this.dir_digikam_trash.name, this.dir_digikam_trash as VirtualNode)
         }
         else
         {
-            var dir_trash = new ImmichRootTrashDirectory(this.file_system, this);
-            result.set(dir_trash.name, dir_trash as VirtualNode)
+            if (!this.dir_trash) this.dir_trash = new ImmichRootTrashDirectory(this.file_system, this);
+            result.set(this.dir_trash.name, this.dir_trash as VirtualNode)
         }
 
         return result
@@ -84,10 +89,23 @@ export class ImmichRootMetadataFile extends ImmichVirtualFile
 {
     private root_folder: ImmichRootDirectory;
 
+    // Timestamp of the last time the rendered settings actually changed.  Using
+    // Timestamp.now() here meant the file's mtime — and therefore its etag — was
+    // different on every single request, so clients re-fetched it continuously.
+    private rendered?: { json: string; mtime: Timestamp };
+
     constructor(file_system: ImmichFileSystem, parent: ImmichRootDirectory)
     {
         super(file_system, FILENAME_FILESYSTEM_OPTIONS, undefined, parent);
         this.root_folder = parent;
+    }
+
+    private render(): { json: string; mtime: Timestamp }
+    {
+        const json = UserConfigLoader.load_user_json(this.file_system.getCurrentUser()?.id, this.file_system.getCurrentUserView());
+        if (!this.rendered || this.rendered.json !== json)
+            this.rendered = { json, mtime: Timestamp.now() };
+        return this.rendered;
     }
 
     async event_setattr(attr: VirtualMetadata): Promise<boolean>
@@ -102,13 +120,12 @@ export class ImmichRootMetadataFile extends ImmichVirtualFile
     }
     async event_stat(): Promise<VirtualMetadata>
     {
-        const metadata = UserConfigLoader.load_user_json(this.file_system.getCurrentUser()?.id, this.file_system.getCurrentUserView());
-        return VirtualMetadata.file_rw(this.name, Buffer.byteLength(metadata, 'utf8'), Timestamp.now());
+        const { json, mtime } = this.render();
+        return VirtualMetadata.file_rw(this.name, Buffer.byteLength(json, 'utf8'), mtime);
     }
     async event_readfile(): Promise<VirtualContentBuffer>
     {
-        const metadata = UserConfigLoader.load_user_json(this.file_system.getCurrentUser()?.id, this.file_system.getCurrentUserView());
-        return VirtualContentBufferUtils.bufferFromString(metadata);
+        return VirtualContentBufferUtils.bufferFromString(this.render().json);
     }
     async event_writefile(contents: VirtualContentBuffer): Promise<boolean>
     {

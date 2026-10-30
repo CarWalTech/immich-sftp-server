@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { config } from "../../config";
 import { VirtualContentBufferUtils } from "../../filesystem/virtual-content-buffer";
 import { VirtualDirectory } from "../../filesystem/virtual-directory";
 import { VirtualMetadata } from "../../filesystem/virtual-metadata";
@@ -80,7 +81,7 @@ export class ImmichDigikamFilesDirectory extends ImmichVirtualDirectory
             sendFn: canDigikamSendFile,
             recieveFn: canDigikamReceiveFile,
             refreshOnMove: true,
-            refreshOnReadDir: true,
+            refreshTtlMs: config.OPTION_DIRECTORY_CACHE_TTL_MS,
         });
     }
 
@@ -129,7 +130,7 @@ export class ImmichDigikamInfoDirectory extends ImmichVirtualDirectory
 
     constructor(file_system: ImmichFileSystem, parent: ImmichDigikamTrashDirectory, files_dir: ImmichDigikamFilesDirectory)
     {
-        super(file_system, DIRNAME_DIGIKAM_INFO, undefined, parent, { refreshOnReadDir: true });
+        super(file_system, DIRNAME_DIGIKAM_INFO, undefined, parent, { refreshTtlMs: config.OPTION_DIRECTORY_CACHE_TTL_MS });
         this.files_dir = files_dir;
     }
 

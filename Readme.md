@@ -243,7 +243,17 @@ The server uses a multi-level cache to minimise API calls to Immich:
 - **Asset buffer cache** — downloaded asset buffers are shared across all connections in an LRU cache (up to `SERVER_OPTION_SHARED_BUFFER_CACHE_CAP` entries). Assets larger than `SERVER_OPTION_MAX_CACHE_BUFFER` are streamed to a per-session tmp file instead.
 - **In-flight deduplication** — concurrent requests for the same path share a single in-flight promise; no album or asset is fetched twice simultaneously across connections.
 - **Background prefetch** — when the album tree is refreshed, all album asset lists are pre-warmed in the background (5 concurrent workers) so that recursive scans (e.g. DigiKam) find data already in cache rather than fetching each album sequentially.
-- **Persistent cache** — asset metadata, album asset lists, and (in preview mode) thumbnail sizes are written to `/config/cache/<userId>-assets.json` so warm data survives server restarts. On first access after a restart the cache is re-validated against Immich in one lightweight timestamp comparison, skipping full re-fetches for unchanged data.
+- **Persistent cache** — asset metadata, album asset lists, rendered `.xmp` sidecars, and (in preview mode) thumbnail sizes are written to `/config/cache/<userId>-assets.json` so warm data survives server restarts. On first access after a restart the cache is re-validated against Immich in one lightweight timestamp comparison, skipping full re-fetches for unchanged data.
+- **Stat cache** — a directory listing resolves every entry's metadata once and publishes it under each entry's path. WebDAV asks for `resourcetype`, `getcontentlength`, `getlastmodified`, `creationdate` and `getetag` as separate lookups per file, so without this a PROPFIND would re-resolve every child around six times.
+- **Tag index** — sidecar rendering needs each asset's tags. If the Immich server can return tags with `POST /search/metadata` they arrive with the listing for free; if not, the bridge builds one `assetId → tags` index by asking each *tag* which assets it holds. That is one request per tag every few minutes instead of one request per asset on every listing.
+
+## File timestamps
+
+- **Asset files** report `fileModifiedAt` (falling back to `fileCreatedAt`), not Immich's `updatedAt`. The original media is immutable once uploaded, so its modification time must be too — `updatedAt` moves whenever any background job touches the row (thumbnail regeneration, face detection, a tag edit), which makes sync clients re-transfer photos whose bytes never changed. WebDAV's `creationdate` reports `fileCreatedAt`.
+- **`.xmp` sidecars** still report `updatedAt`, because their contents genuinely do track the Immich record.
+- **Folders** derive their timestamp from their newest child (albums use the album's own `updatedAt`) rather than the time they were listed.
+
+> **Upgrading:** asset timestamps change value the first time you run this version. Expect one full re-scan (rclone/digiKam/Nextcloud will re-check, and possibly re-download, existing files) — after that, unchanged files stop being re-transferred.
 
 ## Known limitations
 

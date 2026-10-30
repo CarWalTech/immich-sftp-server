@@ -1,3 +1,4 @@
+import { config } from "../../config";
 import { VirtualMetadata } from "../../filesystem/virtual-metadata";
 import { VirtualNode } from "../../filesystem/virtual-node";
 import { Timestamp } from "../../utils/date-utils";
@@ -13,7 +14,7 @@ export class ImmichRootTrashDirectory extends ImmichVirtualDirectory
 {
     constructor(file_system: ImmichFileSystem, root: ImmichRootDirectory)
     {
-        super(file_system, DIRNAME_TRASH, undefined, root, { sendFn: canSendFileTo, recieveFn: canRecieveFileFrom, refreshOnMove: true, refreshOnReadDir: true });
+        super(file_system, DIRNAME_TRASH, undefined, root, { sendFn: canSendFileTo, recieveFn: canRecieveFileFrom, refreshOnMove: true, refreshTtlMs: config.OPTION_DIRECTORY_CACHE_TTL_MS });
     }
     async event_rebuild(): Promise<Map<string, VirtualNode>>
     {
@@ -34,7 +35,7 @@ export class ImmichRootTrashDirectory extends ImmichVirtualDirectory
     }
     async event_stat(): Promise<VirtualMetadata>
     {
-        return VirtualMetadata.directory_rw(this.name, this.mtime);
+        return VirtualMetadata.directory_rw(this.name, this.latestChildMtime());
     }
     async event_mkdir(filename: string): Promise<boolean>
     {

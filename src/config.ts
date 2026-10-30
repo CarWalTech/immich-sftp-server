@@ -32,9 +32,12 @@ export class Config
   PROTOCOL_PORTS_WEBDAV: number
 
   // server settings
+  PATH_IMMICH_MOUNT: string
   OPTION_ENABLE_LOCAL_FILES: boolean
   OPTION_ENABLE_UPLOAD_VALIDATION: boolean
   OPTION_MAX_CONCURRENT_DOWNLOADS: number
+  OPTION_MAX_CONCURRENT_API_CALLS: number
+  OPTION_MAX_CONCURRENT_STATS: number
   OPTION_MAX_READ_BATCH_SIZE: number
   OPTION_MAX_CACHE_BUFFER: number
   OPTION_SHARED_BUFFER_CACHE_CAP: number
@@ -42,6 +45,9 @@ export class Config
   OPTION_SESSION_IDLE_TIMEOUT_SECONDS: number
   OPTION_SHARED_BUFFER_CACHE_MAX_BYTES: number
   OPTION_SESSION_BUFFER_CACHE_MAX_BYTES: number
+  OPTION_XMP_CACHE_CAP: number
+  OPTION_STAT_CACHE_TTL_MS: number
+  OPTION_DIRECTORY_CACHE_TTL_MS: number
 
   // server user defaults
   USERDEFAULTS_ASSET_ENABLE_SIDECAR_FILES: boolean
@@ -80,9 +86,12 @@ export class Config
     this.PROTOCOL_PORTS_WEBDAV = getEnvNumber('SERVER_PROTOCOL_PORTS_WEBDAV', 1900);
 
     // server settings
+    this.PATH_IMMICH_MOUNT = getEnvOrDefault('SERVER_PATH_IMMICH_MOUNT', '/immich').replace(/\/+$/, '');
     this.OPTION_ENABLE_LOCAL_FILES = getEnvBoolean('SERVER_OPTION_ENABLE_LOCAL_FILES', false);
     this.OPTION_ENABLE_UPLOAD_VALIDATION = getEnvBoolean('SERVER_OPTION_ENABLE_UPLOAD_VALIDATION', true);
     this.OPTION_MAX_CONCURRENT_DOWNLOADS = getEnvNumber('SERVER_OPTION_MAX_CONCURRENT_DOWNLOADS', 6, true);
+    this.OPTION_MAX_CONCURRENT_API_CALLS = getEnvNumber('SERVER_OPTION_MAX_CONCURRENT_API_CALLS', 8, true);
+    this.OPTION_MAX_CONCURRENT_STATS = getEnvNumber('SERVER_OPTION_MAX_CONCURRENT_STATS', 32);
     this.OPTION_MAX_READ_BATCH_SIZE = getEnvNumber('SERVER_OPTION_MAX_READ_BATCH_SIZE', 50);
     this.OPTION_MAX_CACHE_BUFFER = getEnvByteSize('SERVER_OPTION_MAX_CACHE_BUFFER', '4MB')
     this.OPTION_MAX_METADATA_WRITE_SIZE = getEnvByteSize('SERVER_OPTION_MAX_METADATA_WRITE_SIZE', '100MB')
@@ -90,6 +99,15 @@ export class Config
     this.OPTION_SHARED_BUFFER_CACHE_MAX_BYTES = getEnvByteSize('SERVER_OPTION_SHARED_BUFFER_CACHE_MAX_BYTES', '256MB')
     this.OPTION_SESSION_IDLE_TIMEOUT_SECONDS = getEnvNumber('SERVER_OPTION_SESSION_IDLE_TIMEOUT_SECONDS', 300)
     this.OPTION_SESSION_BUFFER_CACHE_MAX_BYTES = getEnvByteSize('SERVER_OPTION_SESSION_BUFFER_CACHE_MAX_BYTES', '256MB')
+    this.OPTION_XMP_CACHE_CAP = getEnvNumber('SERVER_OPTION_XMP_CACHE_CAP', 20_000)
+    // Backstop TTL for the per-path stat cache.  Correctness comes from explicit
+    // invalidatePath() calls on every mutation; this only bounds how long a stale
+    // entry can survive if an invalidation is ever missed.  It must comfortably
+    // outlive a single large PROPFIND, which issues ~6 stat() calls per child.
+    this.OPTION_STAT_CACHE_TTL_MS = getEnvNumber('SERVER_OPTION_STAT_CACHE_TTL_MS', 5_000)
+    // How long a built directory node graph is reused before event_rebuild() runs
+    // again.  Explicit refresh() after a write/move/delete bypasses this.
+    this.OPTION_DIRECTORY_CACHE_TTL_MS = getEnvNumber('SERVER_OPTION_DIRECTORY_CACHE_TTL_MS', 30_000)
 
     // server user defaults
     this.USERDEFAULTS_ASSET_ENABLE_SIDECAR_FILES = getEnvBoolean('SERVER_USERDEFAULTS_ASSET_ENABLE_SIDECAR_FILES', true);

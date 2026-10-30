@@ -15,6 +15,9 @@ import { ImmichAlbumBase, ImmichAlbumUser, ImmichAsset, ImmichUser, isCurrentUse
 import { logger } from '../../logger';
 
 // Constants
+// Builder holds no per-document state, so one instance is reused across every
+// sidecar render rather than allocating one per asset.
+const XMP_BUILDER = new Builder(XMPUtils.BUILDER_OPTIONS);
 const NOSYNC_TAG = '#nosync';
 const NOSYNC_TAG_REGEX = /(?:^|\s)#nosync(?:\s|$)/g;
 const NOSYNC_TAG_MATCH_REGEX = /(?:^|\s)#nosync(?:\s|$)/;
@@ -344,11 +347,15 @@ async function persistExtraSidecarFieldsToDisk(asset: ImmichAsset, desc: Record<
     }
     if (Object.keys(writeTags).length === 0) return;
 
-    const filepath = '/immich' + originalPath + '.xmp';
+    const filepath = asset.sidecarPath
+        ? config.PATH_IMMICH_MOUNT + asset.sidecarPath
+        : config.PATH_IMMICH_MOUNT + originalPath + '.xmp';
     try
     {
-        if (!fs.existsSync(filepath))
-            await fs.promises.writeFile(filepath, EMPTY_XMP_SKELETON, 'utf8');
+        // Create the sidecar only when it doesn't exist yet; 'wx' makes that
+        // atomic instead of racing an existsSync check against a concurrent write.
+        try { await fs.promises.writeFile(filepath, EMPTY_XMP_SKELETON, { encoding: 'utf8', flag: 'wx' }); }
+        catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'EEXIST') throw e; }
         await exiftool.write(filepath, writeTags, ['-overwrite_original_in_place']);
         logger.info('MetadataUtils', 'persistExtraSidecarFieldsToDisk',
             `asset=${asset.id} path=${filepath} wrote=${JSON.stringify(writeTags)}`);
@@ -440,12 +447,24 @@ export function generateAssetMetadataDocument(asset: ImmichAsset, existingSideca
     // DigiKam's own native field; regenerated so a DigiKam read-back after a
     // write from another client (e.g. Nextcloud Memories) still sees its
     // preferred field populated instead of silently losing it on round-trip.
-    const immichLeafTags = immichTags.filter(
-        tag => !immichTags.some(other => other !== tag && other.startsWith(tag + '/'))
-    );
+    // A tag is an interior node iff it is a proper prefix-path of another tag —
+    // a set membership test rather than a scan over every pair.
+    const tagAncestors = new Set<string>();
+    for (const tag of immichTags)
+    {
+        const parts = tag.split('/');
+        for (let i = 1; i < parts.length; i++) tagAncestors.add(parts.slice(0, i).join('/'));
+    }
+    const immichLeafTags = immichTags.filter(tag => !tagAncestors.has(tag));
+
     const subjects = immichLeafTags.map(tag => tag.split('/').pop() ?? tag);
+    const subjectsSeen = new Set(subjects);
     for (const name of immichPeople)
-        if (!subjects.includes(name)) subjects.push(name);
+    {
+        if (subjectsSeen.has(name)) continue;
+        subjectsSeen.add(name);
+        subjects.push(name);
+    }
 
     const hierarchical = XMPUtils.buildHierarchical(immichTags);
 
@@ -467,8 +486,7 @@ export function generateAssetMetadataDocument(asset: ImmichAsset, existingSideca
         },
     };
 
-    const builder = new Builder(XMPUtils.BUILDER_OPTIONS);
-    const xml: string = builder.build(doc);
+    const xml: string = XMP_BUILDER.build(doc);
     return `<?xpacket begin='﻿' id='W5M0MpCehiHzreSzNTczkc9d'?>\n${xml}\n<?xpacket end='w'?>`;
 }
 
@@ -607,20 +625,32 @@ export async function _syncAssetTagsFromXmp(asset: ImmichAsset, newTagValues: st
     if (currentTagIds.size === 0 && newTagValues.length === 0) return;
 
     const allTags = await api.FETCH_Tags();
+    const tagsByLabel = new Map<string, string>();
+    for (const tag of allTags)
+    {
+        // First writer wins, matching the previous find()-based lookup order.
+        if (tag.value && !tagsByLabel.has(tag.value)) tagsByLabel.set(tag.value, tag.id);
+        if (tag.name && !tagsByLabel.has(tag.name)) tagsByLabel.set(tag.name, tag.id);
+    }
 
     // Resolve each XMP tag value to an existing or newly created Immich tag
     const targetTagIds = new Set<string>();
     for (const value of newTagValues)
     {
-        const existing = allTags.find(t => t.value === value || t.name === value);
-        if (existing)
+        const existingId = tagsByLabel.get(value);
+        if (existingId !== undefined)
         {
-            targetTagIds.add(existing.id);
+            targetTagIds.add(existingId);
         }
         else
         {
             const created = await api.SERVER_CreateTag(value);
-            if (created?.id) targetTagIds.add(String(created.id));
+            if (created?.id)
+            {
+                targetTagIds.add(String(created.id));
+                // Keep later values in this same batch from re-creating it.
+                tagsByLabel.set(value, String(created.id));
+            }
         }
     }
 
