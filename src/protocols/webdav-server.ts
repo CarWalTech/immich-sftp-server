@@ -15,6 +15,8 @@ import { RangeReadResult, RangeSpec, VirtualFileSystem } from '../filesystem/vir
 import { ImmichFileSystem } from '../immich/immich-file-system';
 import { logger } from '../logger';
 import { Timestamp } from '../utils/date-utils';
+import '../utils/webdav-server-conditional-patch';
+import '../utils/webdav-server-gzip-patch';
 import '../utils/webdav-server-proppatch-patch';
 import '../utils/webdav-server-range-patch';
 import '../utils/xml-js-builder-patch';
