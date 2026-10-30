@@ -64,7 +64,7 @@ export class ImmichAPI
     // determines whether asset tags arrive with the listing or have to be
     // resolved through the tag index (FETCH_TagAssetIndex).
     private static searchSupportsTags: boolean | null = null;
-    private static readonly TAG_INDEX_CONCURRENCY = 4;
+    private static readonly TAG_INDEX_CONCURRENCY = 6;
 
     // Which album objects have had their detail fields applied, and at what
     // updatedAt.  Keyed on identity rather than id: applyAlbumDetails mutates the
@@ -899,43 +899,42 @@ export class ImmichAPI
             const index = new Map<string, ImmichTag[]>();
             if (tags.length === 0) return index;
 
+            // No `visibility`: the server then applies its default (everything but
+            // locked), covering timeline and archive in one pass instead of two
+            // per-visibility passes — half the requests for the same index.
             const collectIds = async (tag: ImmichTag): Promise<void> =>
             {
-                for (const visibility of ['timeline', 'archive'] as const)
+                let page = 1;
+                while (true)
                 {
-                    let page = 1;
-                    while (true)
+                    const response = await this.callApi({
+                        method: 'POST',
+                        endpoint: 'search/metadata',
+                        data: JSON.stringify({
+                            tagIds: [tag.id],
+                            page,
+                            size: 1000,
+                            withDeleted: false,
+                        }),
+                        logAction: 'Tag index',
+                        skipResponseLog: true,
+                        // Background work: yields API slots to navigation.
+                        priority: 'low',
+                    });
+
+                    const items = Array.isArray(response?.assets?.items) ? response.assets.items : [];
+                    for (const item of items)
                     {
-                        const response = await this.callApi({
-                            method: 'POST',
-                            endpoint: 'search/metadata',
-                            data: JSON.stringify({
-                                tagIds: [tag.id],
-                                visibility,
-                                page,
-                                size: 1000,
-                                withDeleted: false,
-                            }),
-                            logAction: 'Tag index',
-                            skipResponseLog: true,
-                            // Background work: yields API slots to navigation.
-                            priority: 'low',
-                        });
-
-                        const items = Array.isArray(response?.assets?.items) ? response.assets.items : [];
-                        for (const item of items)
-                        {
-                            if (!item?.id || typeof item.id !== 'string') continue;
-                            const existing = index.get(item.id);
-                            if (existing) existing.push(tag);
-                            else index.set(item.id, [tag]);
-                        }
-
-                        const nextPageRaw = response?.assets?.nextPage;
-                        const nextPage = typeof nextPageRaw === 'string' ? Number.parseInt(nextPageRaw, 10) : Number.NaN;
-                        if (!Number.isInteger(nextPage) || nextPage <= page || items.length === 0) break;
-                        page = nextPage;
+                        if (!item?.id || typeof item.id !== 'string') continue;
+                        const existing = index.get(item.id);
+                        if (existing) existing.push(tag);
+                        else index.set(item.id, [tag]);
                     }
+
+                    const nextPageRaw = response?.assets?.nextPage;
+                    const nextPage = typeof nextPageRaw === 'string' ? Number.parseInt(nextPageRaw, 10) : Number.NaN;
+                    if (!Number.isInteger(nextPage) || nextPage <= page || items.length === 0) break;
+                    page = nextPage;
                 }
             };
 
@@ -1809,8 +1808,10 @@ export class ImmichAPI
             data: JSON.stringify({ name: tagName }),
             logAction: 'Create tag',
         });
-        // The cached tag list and the assetId→tags index no longer describe reality.
-        this.cache.invalidateTagIndex();
+        // The cached tag list no longer describes reality.  The assetId→tags index
+        // does: a brand-new tag is carried only by the asset being written, whose
+        // tags are refetched and patched in authoritatively.
+        this.cache.invalidateTagList();
         return result;
     }
 

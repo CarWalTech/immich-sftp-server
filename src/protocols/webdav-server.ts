@@ -2,6 +2,7 @@
 // WebDAV Protocol Server — SFTP‑Equivalent Behavior
 // ──────────────────────────────────────────────────────────────
 
+import axios from 'axios';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -50,6 +51,30 @@ const userCache = new Map<string, CachedUser>();
 // In-flight deduplication: prevents concurrent requests from spawning multiple
 // ImmichFileSystem login calls for the same credentials before the first resolves.
 const authInflight = new Map<string, Promise<ImmichWebdavUser>>();
+
+// Recently rejected credentials.  A client holding a revoked API key retries every
+// request (seen at ~18/s), and each retry was a full Immich round-trip plus an
+// error log; within this window the same credentials are refused locally.
+const AUTH_FAILURE_TTL_MS = 30_000;
+const AUTH_FAILURE_CAP = 1_000;
+const authFailures = new Map<string, number>();
+
+function isRecentAuthFailure(key: string): boolean {
+  const expiresAt = authFailures.get(key);
+  if (expiresAt === undefined) return false;
+  if (Date.now() < expiresAt) return true;
+  authFailures.delete(key);
+  return false;
+}
+
+function recordAuthFailure(key: string): void {
+  while (authFailures.size >= AUTH_FAILURE_CAP) {
+    const oldest = authFailures.keys().next().value;
+    if (oldest === undefined) break;
+    authFailures.delete(oldest);
+  }
+  authFailures.set(key, Date.now() + AUTH_FAILURE_TTL_MS);
+}
 
 function pruneUserCache(): void {
   const cutoff = Date.now() - SESSION_TTL_MS;
@@ -101,6 +126,11 @@ class ImmichWebdavUserManager implements webdav.ITestableUserManager {
     // Deduplicate concurrent logins for the same credentials so a burst of
     // incoming requests doesn't spawn multiple ImmichFileSystem sessions.
     const inflightKey = `${username}\0${crypto.createHash('sha256').update(passwordBuf).digest('base64')}`;
+    if (isRecentAuthFailure(inflightKey)) {
+      callback(new Error('Authentication failed'));
+      return;
+    }
+
     const existing = authInflight.get(inflightKey);
     if (existing) {
       existing
@@ -115,7 +145,15 @@ class ImmichWebdavUserManager implements webdav.ITestableUserManager {
       .then((): ImmichWebdavUser => {
         const user: ImmichWebdavUser = { uid: username, username, fsBackend };
         userCache.set(username, { user, passwordBuf, lastUsed: Date.now() });
+        authFailures.delete(inflightKey);
         return user;
+      })
+      .catch(err => {
+        // Only a definitive rejection is remembered; a network blip or Immich
+        // restart must not lock valid credentials out for the whole window.
+        const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+        if (status === 401 || status === 403) recordAuthFailure(inflightKey);
+        throw err;
       })
       .finally(() => authInflight.delete(inflightKey));
 

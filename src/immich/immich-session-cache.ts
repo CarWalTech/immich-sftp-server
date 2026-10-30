@@ -124,6 +124,10 @@ export class ImmichSessionCache
     private tagIndexCache: Map<string, ImmichTag[]> | null = null;
     private tagIndexBuiltAt = 0;
     private inFlightTagIndexBuild: Promise<Map<string, ImmichTag[]>> | null = null;
+    // Authoritative per-asset tag sets learned while a rebuild was in flight.  The
+    // rebuild's queries may have raced the write that produced them, so they are
+    // re-applied on top of the fresh index instead of being lost with the old one.
+    private tagIndexPatches: Map<string, { tags: ImmichTag[]; at: number }> = new Map();
     private static readonly TAG_INDEX_TTL_MS = 300_000;
 
     private tagListCache: ImmichTag[] | null = null;
@@ -385,6 +389,11 @@ export class ImmichSessionCache
     /**
      * TTL-cached + deduplicated tag index.  A cold directory of N sidecars calls
      * this N times in parallel; all of them share one build.
+     *
+     * Stale-while-revalidate: a build costs one search per tag (hundreds of
+     * requests, ~10s+ on a real library), so once an index exists an expired one
+     * keeps being served while its replacement is built in the background.  Only
+     * the very first build — or one after a hard invalidateTagIndex() — blocks.
      */
     public async fetchCachedTagIndex(build: () => Promise<Map<string, ImmichTag[]>>): Promise<Map<string, ImmichTag[]>>
     {
@@ -394,16 +403,36 @@ export class ImmichSessionCache
 
         if (!this.inFlightTagIndexBuild)
         {
+            const startedAt = Date.now();
             this.inFlightTagIndexBuild = build()
                 .then(index =>
                 {
+                    for (const [assetId, patch] of this.tagIndexPatches)
+                        if (patch.at >= startedAt) index.set(assetId, patch.tags);
+                    this.tagIndexPatches.clear();
                     this.tagIndexCache = index;
                     this.tagIndexBuiltAt = Date.now();
                     return index;
                 })
                 .finally(() => { this.inFlightTagIndexBuild = null; });
         }
+
+        if (this.tagIndexCache !== null)
+        {
+            // Background refresh — failures are already logged by the builder and
+            // simply leave the previous index in service until the next attempt.
+            this.inFlightTagIndexBuild.catch(() => { });
+            return this.tagIndexCache;
+        }
         return this.inFlightTagIndexBuild;
+    }
+
+    /** Record an asset's authoritative tag set (e.g. just after a sidecar write). */
+    public patchTagIndex(assetId: string, tags: ImmichTag[]): void
+    {
+        this.tagIndexCache?.set(assetId, tags);
+        if (this.inFlightTagIndexBuild)
+            this.tagIndexPatches.set(assetId, { tags, at: Date.now() });
     }
 
     /** TTL-cached GET /api/tags — the tag list changes far less often than it is read. */
@@ -426,10 +455,18 @@ export class ImmichSessionCache
         return this.inFlightTagListFetch;
     }
 
+    // Hard reset: the next lookup blocks on a full rebuild.  Reserved for external
+    // changes (invalidateAll), where any asset's tags may have moved.
     public invalidateTagIndex(): void
     {
         this.tagIndexCache = null;
         this.tagIndexBuiltAt = 0;
+        this.tagIndexPatches.clear();
+        this.invalidateTagList();
+    }
+
+    public invalidateTagList(): void
+    {
         this.tagListCache = null;
         this.tagListCachedAt = 0;
     }
@@ -656,6 +693,8 @@ export class ImmichSessionCache
         const actual_asset = needsAuthoritative
             ? await api.FETCH_AssetWithTags(assetId)
             : await api.HYDRATE_AssetTags(cachedEntry!.data);
+        if (needsAuthoritative && actual_asset.tags !== undefined)
+            this.patchTagIndex(assetId, actual_asset.tags);
         const updatedAt = actual_asset.updatedAt ?? '';
 
         // Return already-rendered XMP if the asset hasn't changed.
@@ -734,15 +773,16 @@ export class ImmichSessionCache
     //
     // The tag index cannot serve this: the write is what changed the tags, so a
     // bulk index built up to TAG_INDEX_TTL_MS ago would hand back the old set.
-    // Mark the asset for an authoritative refetch and drop the index, which the
-    // write has just invalidated for every other asset sharing those tags too.
+    // Mark the asset for an authoritative refetch, whose result is patched back
+    // into the index (fetchCachedAssetXMP).  The rest of the index stays valid —
+    // tagging one asset changes no other asset's tags — so it is not dropped;
+    // doing so made every write in a bulk tag edit pay for a full rebuild.
     public invalidateAssetXMP(assetId: string): void
     {
         const cached = this.assetInfoCache.get(assetId);
         if (cached)
             this.assetInfoCache.set(assetId, { ...cached, data: { ...cached.data, tags: undefined } });
         this.forceAssetRefetch.add(assetId);
-        this.invalidateTagIndex();
         this.xmpCache.delete(assetId);
         // A sidecar write may have just created the on-disk file we previously
         // recorded as absent.
