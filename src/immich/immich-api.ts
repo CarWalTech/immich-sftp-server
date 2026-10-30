@@ -27,6 +27,10 @@ import { AlbumMetadataDocumentUtils } from "./utils/immich-metadata-utils";
 
 
 
+// Read chunk for local-disk streams.  Node's 64KB default meant ~16 read syscalls
+// and event-loop turns per MB on full-size RAWs and videos.
+const LOCAL_READ_CHUNK_BYTES = 1024 * 1024;
+
 export class ImmichAPI
 {
     private immichAccessToken: string = '';
@@ -1343,26 +1347,12 @@ export class ImmichAPI
         const localCached = this.cache.assetFileBuffers.get(asset.id);
         if (localCached) return localCached;
 
-        // 2. Local file mode — the bytes are already on a local disk, so the only
-        //    question is whether it is worth holding a copy in RAM.
+        // 2. Local file mode — the bytes are already on a local disk, so hand back a
+        //    path-backed node served through a lazily-opened fd.  No RAM copy: the
+        //    OS page cache already holds hot files, and buffering them here only
+        //    duplicated that into the heap (up to both cache budgets' worth).
         if (config.OPTION_ENABLE_LOCAL_FILES)
-        {
-            const filepath = config.PATH_IMMICH_MOUNT + asset.originalPath;
-            const stats = await fs.promises.stat(filepath);
-
-            // Above the cache budget, hand back a path-backed node: reads are served
-            // straight off the mounted library through a lazily-opened fd.  Slurping
-            // a multi-GB video into the heap here would bypass the tmp-file spill
-            // that the HTTP path uses for exactly this reason.
-            if (stats.size > config.OPTION_MAX_CACHE_BUFFER)
-                return new VirtualContentBuffer(undefined, undefined, filepath);
-
-            const data = await fs.promises.readFile(filepath);
-            const buf = new VirtualContentBuffer(undefined, data);
-            this.cache.setAssetBuffer(asset.id, buf);
-            ImmichAPI.CACHE_SetShared(asset.id, buf);
-            return buf;
-        }
+            return new VirtualContentBuffer(undefined, undefined, config.PATH_IMMICH_MOUNT + asset.originalPath);
 
         // 3. Global buffer cache — plain memory, safe to share across connections
         const sharedCached = ImmichAPI.CACHE_GetShared(asset.id);
@@ -1526,17 +1516,18 @@ export class ImmichAPI
     // second, uncoordinated download.
     async SERVER_ReadAssetStream(asset: ImmichAsset, signal?: AbortSignal): Promise<StreamReadResult | null>
     {
-        if (this.cache.assetFileBuffers.has(asset.id)) return null;
-        if (ImmichAPI.CACHE_GetShared(asset.id)) return null;
-
+        // Local disk is served directly every time — not tee'd into the RAM caches,
+        // for the same page-cache reason as SERVER_ReadAsset.
         if (config.OPTION_ENABLE_LOCAL_FILES)
         {
             const filepath = config.PATH_IMMICH_MOUNT + asset.originalPath;
             const total = (await fs.promises.stat(filepath)).size;
-            const stream = fs.createReadStream(filepath, signal ? { signal } : undefined);
-            this.maybeCacheSmallStream(asset.id, stream, total);
+            const stream = fs.createReadStream(filepath, { highWaterMark: LOCAL_READ_CHUNK_BYTES, signal });
             return { stream, contentLength: total };
         }
+
+        if (this.cache.assetFileBuffers.has(asset.id)) return null;
+        if (ImmichAPI.CACHE_GetShared(asset.id)) return null;
 
         if (ImmichAPI.downloadsInFlight.has(asset.id)) return null;
 
@@ -1646,7 +1637,7 @@ export class ImmichAPI
             const filepath = config.PATH_IMMICH_MOUNT + asset.originalPath;
             const total = (await fs.promises.stat(filepath)).size;
             const { start, end } = resolveAgainst(total);
-            return { stream: fs.createReadStream(filepath, { start, end }), start, end, total };
+            return { stream: fs.createReadStream(filepath, { start, end, highWaterMark: LOCAL_READ_CHUNK_BYTES }), start, end, total };
         }
 
         // 3. Proxy the byte-range straight through to Immich — no buffering, no

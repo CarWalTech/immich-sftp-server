@@ -45,6 +45,7 @@ export class SessionLogfileGenerator
     private static session_id: Date;
     private static session_id_str: string;
     private static rolling_filestream: RotatingFileStream
+    private static global_filestream?: fs.WriteStream
 
     static init()
     {
@@ -117,8 +118,12 @@ export class SessionLogfileGenerator
             SessionLogfileGenerator._startup = true;
         }
 
-        fs.appendFileSync(SessionLogfileGenerator.global_filename(), LogfileUtils.output(logObj))
-        SessionLogfileGenerator.rolling_filestream.write(LogfileUtils.output(logObj));
+        // Async append: appendFileSync blocked the event loop on every log line, which
+        // with debug/API logging on meant a disk write per request in the hot path.
+        SessionLogfileGenerator.global_filestream ??= fs.createWriteStream(SessionLogfileGenerator.global_filename(), { flags: 'a' });
+        const line = LogfileUtils.output(logObj);
+        SessionLogfileGenerator.global_filestream.write(line);
+        SessionLogfileGenerator.rolling_filestream.write(line);
     }
 };
 SessionLogfileGenerator.init();

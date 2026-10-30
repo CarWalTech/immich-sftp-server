@@ -594,6 +594,11 @@ export class WebdavProtocolServer implements TransferProtocolServer {
       ctx.response.once('close', settle);
 
       const timer = setTimeout(() => {
+        // Only a request that is stuck before any bytes move is treated as hung.  A
+        // GET whose body is already streaming, or a PUT whose body is still arriving,
+        // is a large transfer in progress — cutting it off here truncated big
+        // downloads and failed every upload that took longer than this window.
+        if (ctx.response.headersSent || !ctx.request.complete) return;
         logger.warn('WebDAV', 'TIMEOUT', `Request timed out: ${ctx.request.method} ${ctx.request.url}`);
         try {
           if (!ctx.response.writableEnded) {
@@ -618,8 +623,10 @@ export class WebdavProtocolServer implements TransferProtocolServer {
         httpServer.keepAliveTimeout = 65_000;
         // Give clients enough time to finish sending headers even on slow links.
         httpServer.headersTimeout = 70_000;
-        // Hard ceiling on how long any single request may occupy a connection slot.
-        httpServer.requestTimeout = 60_000;
+        // Disabled: Node's requestTimeout covers receiving the *whole* request body,
+        // so any upload slower than the limit was dropped mid-transfer.  Stuck
+        // requests are still caught by the timer in beforeRequest above.
+        httpServer.requestTimeout = 0;
         // Disable the idle socket timeout — we rely on keepAliveTimeout instead.
         httpServer.timeout = 0;
 
