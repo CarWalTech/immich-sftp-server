@@ -22,7 +22,7 @@ import { StringUtils2 } from "../utils/string-utils";
 import { ImmichAssetFileType } from "./files/immich-asset-file";
 import { ImmichSessionCache } from './immich-session-cache';
 import { ImmichVirtualDirectory } from './immich-virtual-directory';
-import { API_USERAGENT, applyAlbumDetails, extractCurrentUser, findAlbumNode, getAlbumsFingerprint, getAssetMtime, getVirtualAlbumTree, ImmichAlbumApiResponse, ImmichAlbumDirectoryInfo, ImmichAsset, ImmichTag, ImmichTagDirectoryInfo, ImmichUser, mapAlbumFromApi, mapAssetFromApi, mapFilesFromAssets, mapTagFromApi, USERNAME_API_KEY, USERNAME_FLAG_SEPERATOR } from "./utils/immich-api-utils";
+import { API_USERAGENT, applyAlbumDetails, excludeAlbumSubtrees, extractCurrentUser, findAlbumNode, getAlbumsFingerprint, getAssetMtime, getFrameleafAlbumTree, getVirtualAlbumTree, ImmichAlbumApiResponse, ImmichAlbumDirectoryInfo, ImmichAsset, ImmichTag, ImmichTagDirectoryInfo, ImmichUser, mapAlbumFromApi, mapAssetFromApi, mapFilesFromAssets, mapTagFromApi, USERNAME_API_KEY, USERNAME_FLAG_SEPERATOR } from "./utils/immich-api-utils";
 import { AlbumMetadataDocumentUtils } from "./utils/immich-metadata-utils";
 
 
@@ -366,6 +366,11 @@ export class ImmichAPI
         // Filter out albums with empty or invalid display names
         filteredAlbums = filteredAlbums.filter(album => isValidFilename(album.displayName!));
 
+        // Frameleaf mode: names only need to be unique among siblings, which the
+        // tree builder handles; hide whatever sits below an excluded album.
+        if (this.isFrameleafHierarchy())
+            return excludeAlbumSubtrees(albums, filteredAlbums);
+
         // Filter out duplicate display names (case-insensitive)
         const seenNames = new Set<string>();
         filteredAlbums = filteredAlbums.filter(album =>
@@ -503,14 +508,30 @@ export class ImmichAPI
         //Process and filter albums
         return this.filterAlbums(response);
     }
+    public isFrameleafHierarchy(): boolean
+    {
+        return this.userSettings.albumHierarchyMode === 'frameleaf';
+    }
+    private buildAlbumTree(albums: ImmichAlbumDirectoryInfo[])
+    {
+        return this.isFrameleafHierarchy()
+            ? getFrameleafAlbumTree(albums)
+            : getVirtualAlbumTree(albums, this.userSettings.subAlbumSeperator);
+    }
+    // The tree depends on the hierarchy settings too, so a settings change
+    // rebuilds it instead of serving a tree cached under the old layout.
+    private albumTreeFingerprint(albums: ImmichAlbumDirectoryInfo[]): string
+    {
+        return `${getAlbumsFingerprint(albums)}|${this.userSettings.albumHierarchyMode}|${this.userSettings.subAlbumSeperator}`;
+    }
     public async FETCH_AlbumVirtualTree()
     {
         let fetchedAlbums: ImmichAlbumDirectoryInfo[] | null = null;
         const getAlbums = async () => { if (!fetchedAlbums) fetchedAlbums = await this.FETCH_Albums(); return fetchedAlbums; };
 
         const result = await this.cache.fetchCachedAlbumTree(`ROOT`, {
-            fetchMeta: async () => { const albums = await getAlbums(); return { updatedAt: getAlbumsFingerprint(albums) }; },
-            fetchData: async () => { const albums = await getAlbums(); return getVirtualAlbumTree(albums, this.userSettings.subAlbumSeperator); }
+            fetchMeta: async () => { const albums = await getAlbums(); return { updatedAt: this.albumTreeFingerprint(albums) }; },
+            fetchData: async () => { const albums = await getAlbums(); return this.buildAlbumTree(albums); }
         });
 
         // Kick off a background pre-warm of all album asset caches so that DigiKam
@@ -570,11 +591,11 @@ export class ImmichAPI
         const getAlbums = async () => { if (!fetchedAlbums) fetchedAlbums = await this.FETCH_Albums(); return fetchedAlbums; };
 
         return await this.cache.fetchCachedAlbumTree(`${path_id}`, {
-            fetchMeta: async () => { const albums = await getAlbums(); return { updatedAt: getAlbumsFingerprint(albums) }; },
+            fetchMeta: async () => { const albums = await getAlbums(); return { updatedAt: this.albumTreeFingerprint(albums) }; },
             fetchData: async () =>
             {
                 const albums = await getAlbums();
-                const tree = getVirtualAlbumTree(albums, this.userSettings.subAlbumSeperator);
+                const tree = this.buildAlbumTree(albums);
                 return findAlbumNode(tree, n => n.path_id === path_id) ?? undefined;
             }
         });
@@ -1196,12 +1217,13 @@ export class ImmichAPI
             logAction: 'Remove asset from album'
         });
     }
-    async SERVER_CreateAlbum(albumName: string): Promise<string>
+    /** parentId nests the new album (Frameleaf only; stock Immich ignores it). */
+    async SERVER_CreateAlbum(albumName: string, parentId?: string): Promise<string>
     {
         const response = await this.callApi({
             method: 'POST',
             endpoint: 'albums',
-            data: JSON.stringify({ albumName }),
+            data: JSON.stringify(parentId ? { albumName, parentId } : { albumName }),
             logAction: 'Create album'
         });
 

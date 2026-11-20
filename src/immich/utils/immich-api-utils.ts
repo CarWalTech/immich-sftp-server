@@ -76,6 +76,8 @@ export interface ImmichAlbumApiResponse
     createdAt?: string;
     updatedAt?: string;
     albumUsers?: unknown[];
+    parentId?: string | null;
+    kind?: string;
 }
 export interface ImmichAlbumBase
 {
@@ -88,6 +90,10 @@ export interface ImmichAlbumBase
     createdAt?: string;
     updatedAt?: string;
     albumUsers?: ImmichAlbumUser[];
+    // Frameleaf only: parent album/collection (null/undefined = top level) and
+    // 'album' | 'collection' | 'space'. Absent on stock Immich.
+    parentId?: string | null;
+    kind?: string;
 }
 export interface ImmichAlbumDirectoryInfo extends ImmichAlbumBase
 {
@@ -203,6 +209,82 @@ export function getVirtualAlbumTree(albums: ImmichAlbumDirectoryInfo[], seperato
         node.album = album;
     }
 
+    return root;
+}
+/**
+ * Frameleaf mode: drop albums that sit below an excluded album (#nosync or an
+ * unusable name), so excluding a collection hides everything inside it rather
+ * than spilling its albums out to the top level.
+ */
+export function excludeAlbumSubtrees(all: ImmichAlbumDirectoryInfo[], kept: ImmichAlbumDirectoryInfo[]): ImmichAlbumDirectoryInfo[]
+{
+    const keptIds = new Set(kept.map(a => a.id));
+    const parentById = new Map(all.map(a => [a.id, a.parentId ?? null]));
+    const excluded = new Set(all.filter(a => !keptIds.has(a.id)).map(a => a.id));
+
+    return kept.filter(album =>
+    {
+        const seen = new Set<string>();
+        let parent = album.parentId ?? null;
+        while (parent && !seen.has(parent))
+        {
+            if (excluded.has(parent)) return false;
+            seen.add(parent);
+            parent = parentById.get(parent) ?? null;
+        }
+        return true;
+    });
+}
+/**
+ * Frameleaf mode: build the folder tree from each album's parentId. Each album
+ * becomes exactly one folder named after its own (leaf) name. An album whose
+ * parent isn't visible to this user is shown at the top level. Sibling name
+ * clashes (case-insensitive) get a short id suffix so neither disappears.
+ */
+export function getFrameleafAlbumTree(albums: ImmichAlbumDirectoryInfo[]): ImmichAlbumsDirectoryNode
+{
+    const root: ImmichAlbumsDirectoryNode = { rawName: '', fsName: '', children: new Map(), path_id: "ROOT" };
+
+    const byId = new Map(albums.map(a => [a.id, a]));
+    const childrenOf = new Map<string, ImmichAlbumDirectoryInfo[]>();
+    for (const album of albums)
+    {
+        const parent = album.parentId && album.parentId !== album.id && byId.has(album.parentId) ? album.parentId : 'ROOT';
+        const list = childrenOf.get(parent);
+        if (list) list.push(album); else childrenOf.set(parent, [album]);
+    }
+
+    // Oldest first, so a later duplicate is the one that gets the suffix and an
+    // existing folder never changes name when a same-named sibling appears.
+    const byAge = (a: ImmichAlbumDirectoryInfo, b: ImmichAlbumDirectoryInfo) =>
+        (a.createdAt ?? '').localeCompare(b.createdAt ?? '') || a.id.localeCompare(b.id);
+
+    const visited = new Set<string>();
+    const attach = (node: ImmichAlbumsDirectoryNode, key: string) =>
+    {
+        const kids = (childrenOf.get(key) ?? []).slice().sort(byAge);
+        const taken = new Set<string>();
+        for (const album of kids)
+        {
+            if (visited.has(album.id)) continue; // cycle guard (server forbids cycles)
+            visited.add(album.id);
+
+            let fs = getAlbumNormalizedName(album.albumName, album.id);
+            if (taken.has(fs.toLowerCase())) fs = `${fs} [${album.id.slice(0, 8)}]`;
+            taken.add(fs.toLowerCase());
+
+            const child: ImmichAlbumsDirectoryNode = {
+                rawName: album.albumName,
+                fsName: fs,
+                children: new Map(),
+                path_id: `${node.path_id}/${fs}`,
+                album,
+            };
+            node.children.set(fs, child);
+            attach(child, album.id);
+        }
+    };
+    attach(root, 'ROOT');
     return root;
 }
 export function getAlbumMtime(album: ImmichAlbumBase): Timestamp
@@ -371,6 +453,8 @@ export function mapAlbumFromApi(item: ImmichAlbumApiResponse): ImmichAlbumBase
         createdAt: item.createdAt ? String(item.createdAt) : undefined,
         updatedAt: item.updatedAt ? String(item.updatedAt) : undefined,
         albumUsers: mapAlbumUsers(item.albumUsers),
+        parentId: typeof item.parentId === 'string' && item.parentId ? item.parentId : null,
+        kind: typeof item.kind === 'string' ? item.kind : undefined,
     };
 }
 export function mapAssetFromApi(asset: any): ImmichAsset

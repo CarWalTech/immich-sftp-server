@@ -101,8 +101,13 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
     {
         return this.file_system.getApi().getUserSettings().subAlbumSeperator;
     }
+    public is_frameleaf_hierarchy()
+    {
+        return this.file_system.getApi().isFrameleafHierarchy();
+    }
     public get_album_fullname()
     {
+        if (this.is_frameleaf_hierarchy()) return this.get_album_realname();
         const segments = this.get_album_path();
         return segments.join(this.get_album_seperator());
     }
@@ -137,6 +142,17 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
 
     async event_rename(new_name: string): Promise<boolean>
     {
+        if (this.is_frameleaf_hierarchy())
+        {
+            // Nesting lives in parentId, so only this album's own name changes;
+            // everything below it moves along on the server.
+            const album = this.node_data.album;
+            if (!album) return false;
+            await this.file_system.getApi().SERVER_RenameAlbum(album, new_name);
+            this.refresh();
+            return true;
+        }
+
         const separator = this.get_album_seperator();
 
         // 1. Compute the old path segments for THIS album
@@ -194,6 +210,15 @@ export class ImmichAlbumFolder extends ImmichVirtualDirectory
     }
     async event_mkdir(folderName: string): Promise<boolean>
     {
+        if (this.is_frameleaf_hierarchy())
+        {
+            const parent = this.node_data.album;
+            if (!parent) return false;
+            await this.file_system.getApi().SERVER_CreateAlbum(folderName, parent.id);
+            this.refresh();
+            return true;
+        }
+
         const segments = this.get_album_path();
         segments.push(folderName);
         const albumName = segments.join(this.get_album_seperator());

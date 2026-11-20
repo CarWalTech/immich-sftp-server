@@ -47,6 +47,23 @@ These map to Immich albums named `Vacations / Italy` and `Vacations / Japan`. Cr
 
 The separator is configurable via `SERVER_USERDEFAULTS_ALBUM_SUBFOLDER_PATTERN`.
 
+### Frameleaf mode
+
+Frameleaf (an Immich fork) stores real nesting: every album can have a parent album. Set `albumHierarchyMode` to `frameleaf` (per user/view in `[SETTINGS].json`, or for everyone with `SERVER_USERDEFAULTS_ALBUM_HIERARCHY_MODE=frameleaf`) and folders follow that hierarchy instead of splitting names:
+
+- Each album is one folder, named after its own name (`Italy`, not `Vacations / Italy`). Any folder can hold both photos and sub-albums.
+- Creating a subfolder creates an album inside that album. Renaming a folder renames only that album, and its children stay inside it.
+- Frameleaf collections are shown and handled exactly like albums: both can hold photos and sub-folders.
+- Two folders inside the same parent with the same name (ignoring case) both appear, and the newer one gets an ` [id]` suffix.
+- Deleting a folder deletes only that album. Frameleaf moves its children up one level.
+
+`scripts/frameleaf-album-migrate.mjs` converts separator-style names (`Vacations / Italy`) into real nesting. It previews the changes by default and writes a rollback file before it changes anything. To use one kind of parent folder everywhere, it can also convert in either direction:
+
+- `--nest-with-collections`: every album that has sub-albums becomes a collection, and its photos are copied over and checked by count before the old album is removed.
+- `--convert-collections`: every collection becomes an album.
+
+Folder paths stay the same either way.
+
 ## Album metadata (`[ALBUM].yaml`)
 
 Each album folder contains a `[ALBUM].yaml` file. Reading it shows:
@@ -85,7 +102,8 @@ The `[SETTINGS].json` file at the root reflects your user-specific preferences. 
   "assetFileNamePattern": "original",
   "assetDownloadSource": "original",
   "assetSidecarsEnabled": true,
-  "subAlbumSeperator": " / "
+  "subAlbumSeperator": " / ",
+  "albumHierarchyMode": "separator"
 }
 ```
 
@@ -194,6 +212,7 @@ services:
 | `SERVER_USERDEFAULTS_ASSET_DOWNLOAD_SOURCE` | `original` | `original` (full resolution) or `preview` (server-transcoded JPEG thumbnail). |
 | `SERVER_USERDEFAULTS_ASSET_ENABLE_SIDECAR_FILES` | `true` | Expose a `.xmp` sidecar file alongside each asset. |
 | `SERVER_USERDEFAULTS_ALBUM_SUBFOLDER_PATTERN` | ` / ` | Separator used to split album names into nested folders. |
+| `SERVER_USERDEFAULTS_ALBUM_HIERARCHY_MODE` | `separator` | `separator` (split album names) or `frameleaf` (use the server's album/collection hierarchy). |
 | `SERVER_USERDEFAULTS_ENABLE_ALBUM_LINKS` | `true` | Include a browser shortcut file (`.html`) in each album folder that opens the album in Immich. |
 | `SERVER_USERDEFAULTS_ENABLE_ALBUM_METADATA` | `true` | Include a `[ALBUM].yaml` metadata file in each album folder (read/write album description and sharing). |
 | `SERVER_USERDEFAULTS_ENABLE_TRASH_LINK` | `true` | Include a browser shortcut file in the Trash folder that opens Immich trash view. |

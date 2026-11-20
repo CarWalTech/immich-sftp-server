@@ -77,3 +77,23 @@ export function getBoolOrDefault(value: boolean | undefined, fallback: boolean)
 
 
 
+
+export type AlbumHierarchyMode = 'separator' | 'frameleaf';
+
+/**
+ * 'separator' splits album names on subAlbumSeperator (Immich has no nesting).
+ * 'frameleaf' uses the server's own parentId hierarchy (albums + collections).
+ */
+export function parseAlbumHierarchyMode(value: string | undefined): AlbumHierarchyMode | undefined
+{
+    if (!value) return undefined;
+    const normalized = value.trim().toLowerCase();
+    const byValue: Record<string, AlbumHierarchyMode> = {
+        separator: 'separator',
+        name: 'separator',
+        frameleaf: 'frameleaf',
+        hierarchy: 'frameleaf',
+        parent: 'frameleaf',
+    };
+    return byValue[normalized];
+}

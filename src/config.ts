@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { logger } from './logger';
-import { AssetDownloadSource, AssetFileNamePattern, getBoolOrDefault, parseAssetDownloadSource, parseAssetFileNamePattern } from './utils/config-utils';
+import { AlbumHierarchyMode, AssetDownloadSource, AssetFileNamePattern, getBoolOrDefault, parseAlbumHierarchyMode, parseAssetDownloadSource, parseAssetFileNamePattern } from './utils/config-utils';
 import { getEnvBoolean, getEnvByteSize, getEnvNumber, getEnvOrDefault, getOptionalEnv, requireEnv } from './utils/env-utils';
 import { getOptionalNestedBoolean, getOptionalNestedString } from './utils/yaml-utils';
 
@@ -55,6 +55,7 @@ export class Config
   USERDEFAULTS_ASSET_ALLOW_FILE_METADATA_WRITES: boolean
   USERDEFAULTS_ASSET_FILEPATTERN: AssetFileNamePattern
   USERDEFAULTS_ASSET_DOWNLOAD_SOURCE: AssetDownloadSource
+  USERDEFAULTS_ALBUM_HIERARCHY_MODE: AlbumHierarchyMode
   USERDEFAULTS_ALBUM_SUBFOLDER_PATTERN: string
   USERDEFAULTS_ENABLE_ALBUM_LINKS: boolean;
   USERDEFAULTS_ENABLE_ALBUM_METADATA: boolean;
@@ -116,6 +117,7 @@ export class Config
     this.USERDEFAULTS_ASSET_FILEPATTERN = parseAssetFileNamePattern(getOptionalEnv('SERVER_USERDEFAULTS_ASSET_FILEPATTERN')) ?? 'original';
     this.USERDEFAULTS_ASSET_DOWNLOAD_SOURCE = parseAssetDownloadSource(getOptionalEnv('SERVER_USERDEFAULTS_ASSET_DOWNLOAD_SOURCE')) ?? 'original';
     this.USERDEFAULTS_ALBUM_SUBFOLDER_PATTERN = getEnvOrDefault('SERVER_USERDEFAULTS_ALBUM_SUBFOLDER_PATTERN', " / ");
+    this.USERDEFAULTS_ALBUM_HIERARCHY_MODE = parseAlbumHierarchyMode(getOptionalEnv('SERVER_USERDEFAULTS_ALBUM_HIERARCHY_MODE')) ?? 'separator';
     this.USERDEFAULTS_ENABLE_ALBUM_LINKS = getEnvBoolean('SERVER_USERDEFAULTS_ENABLE_ALBUM_LINKS', true);
     this.USERDEFAULTS_ENABLE_ALBUM_METADATA = getEnvBoolean('SERVER_USERDEFAULTS_ENABLE_ALBUM_METADATA', true);
     this.USERDEFAULTS_ENABLE_TRASH_LINK = getEnvBoolean('SERVER_USERDEFAULTS_ENABLE_TRASH_LINK', true);
@@ -126,6 +128,7 @@ export class Config
 export interface UserConfig
 {
   subAlbumSeperator: string
+  albumHierarchyMode: AlbumHierarchyMode
   assetFileNamePattern: AssetFileNamePattern
   assetDownloadSource: AssetDownloadSource
   assetSidecarsEnabled: boolean
@@ -167,6 +170,7 @@ export class UserConfigLoader
     const envFileNamePattern = parseAssetFileNamePattern(getOptionalNestedString(json, ['assetFileNamePattern']));
     const envDownloadSource = parseAssetDownloadSource(getOptionalNestedString(json, ['assetDownloadSource']));
     const envSubAlbumSeperator = getOptionalNestedString(json, ['subAlbumSeperator'], false)
+    const envAlbumHierarchyMode = parseAlbumHierarchyMode(getOptionalNestedString(json, ['albumHierarchyMode']))
     const envEnableSidecarFiles = getOptionalNestedBoolean(json, ['assetSidecarsEnabled'])
     const envEmbedMetadata = getOptionalNestedBoolean(json, ['assetEmbedMetadata'])
     const envAllowFileMetadataWrites = getOptionalNestedBoolean(json, ['assetAllowFileMetadataWrites'])
@@ -176,6 +180,7 @@ export class UserConfigLoader
     const envDigikamTrashCompat = getOptionalNestedBoolean(json, ['digikamTrashCompat'])
     return {
       subAlbumSeperator: envSubAlbumSeperator ?? this.DEFAULTS.subAlbumSeperator,
+      albumHierarchyMode: envAlbumHierarchyMode ?? this.DEFAULTS.albumHierarchyMode,
       assetDownloadSource: envDownloadSource ?? this.DEFAULTS.assetDownloadSource,
       assetFileNamePattern: envFileNamePattern ?? this.DEFAULTS.assetFileNamePattern,
       assetSidecarsEnabled: getBoolOrDefault(envEnableSidecarFiles, this.DEFAULTS.assetSidecarsEnabled),
@@ -192,6 +197,7 @@ export class UserConfigLoader
     var config = new Config();
     return {
       subAlbumSeperator: config.USERDEFAULTS_ALBUM_SUBFOLDER_PATTERN,
+      albumHierarchyMode: config.USERDEFAULTS_ALBUM_HIERARCHY_MODE,
       assetFileNamePattern: config.USERDEFAULTS_ASSET_FILEPATTERN,
       assetDownloadSource: config.USERDEFAULTS_ASSET_DOWNLOAD_SOURCE,
       assetSidecarsEnabled: config.USERDEFAULTS_ASSET_ENABLE_SIDECAR_FILES,
